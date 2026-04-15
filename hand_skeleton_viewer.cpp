@@ -33,7 +33,7 @@ constexpr std::array<std::pair<int, int>, 20> fixedBoneConnectionList = {{
     {0, 16},
 }};
 
-// closedPosePointList: 20 点闭合模板，直接固化到 C++。
+// closedPosePointList: 20 点标准伸直模板
 const std::array<cv::Point2f, SkeletonTemplate20::pointCount> closedPosePointList = {{
     cv::Point2f(475.0f, 418.0f),
     cv::Point2f(558.0f, 340.0f),
@@ -57,7 +57,7 @@ const std::array<cv::Point2f, SkeletonTemplate20::pointCount> closedPosePointLis
     cv::Point2f(394.0f, 153.0f),
 }};
 
-// fistPosePointList: 由 Python 参考工程的 hold_normalized.json 映射到当前 20 点骨架后的握拳模板。
+// fistPosePointList: 握拳模板。
 const std::array<cv::Point2f, SkeletonTemplate20::pointCount> fistPosePointList = {{
     cv::Point2f(462.0f, 455.0f),
     cv::Point2f(531.0f, 367.0f),
@@ -81,7 +81,7 @@ const std::array<cv::Point2f, SkeletonTemplate20::pointCount> fistPosePointList 
     cv::Point2f(415.0f, 316.0f),
 }};
 
-// 颜色统一按超哥给的浅底风格设置，OpenCV 使用的是 BGR 顺序。
+// 颜色
 const cv::Scalar backgroundColorValue(255, 255, 255);
 const cv::Scalar boneColorValue(219, 12, 8);
 const cv::Scalar pointColorValue(79, 19, 242);
