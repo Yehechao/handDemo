@@ -46,10 +46,17 @@ bool isFlexChannel(int channelIndex) {
 }
 
 double calculateChannelRatio(double currentValue, double startValue, double endValue) {
-    const double deltaValue = endValue - startValue;
-    if (std::abs(deltaValue) < 1.0) {
+    // 弯曲通道统一采用单向正向模型：
+    // Closed 是 0 度基线，只有当前值高于 Closed 才允许产生弯曲。
+    if (currentValue <= startValue) {
         return 0.0;
     }
+
+    const double deltaValue = endValue - startValue;
+    if (deltaValue <= 1.0) {
+        return 0.0;
+    }
+
     return clampValue((currentValue - startValue) / deltaValue, 0.0, 1.0);
 }
 
@@ -355,9 +362,9 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
         double jointFlexRatio1,
         double jointFlexRatio2,
         const FingerFlexAngleModel& angleModel) {
-        targetValueList[0] = convertAngleToFloat(std::abs(rootFlexRatio * angleModel.rootHoldDeltaAngle));
-        targetValueList[1] = convertAngleToFloat(std::abs(jointFlexRatio1 * angleModel.jointHoldDeltaAngle1));
-        targetValueList[2] = convertAngleToFloat(std::abs(jointFlexRatio2 * angleModel.jointHoldDeltaAngle2));
+        targetValueList[0] = convertAngleToFloat(rootFlexRatio * angleModel.rootHoldDeltaAngle);
+        targetValueList[1] = convertAngleToFloat(jointFlexRatio1 * angleModel.jointHoldDeltaAngle1);
+        targetValueList[2] = convertAngleToFloat(jointFlexRatio2 * angleModel.jointHoldDeltaAngle2);
     };
 
     const FingerChannelModel& indexChannelModel = kFingerChannelModelByIndex[static_cast<std::size_t>(FourFingerIndex::Index)];
