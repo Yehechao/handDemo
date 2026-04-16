@@ -299,61 +299,17 @@ double HandAngleAlgorithm::stabilizeRatio(RatioStableState& stableState, double 
     const double clampedRatioValue = clampValue(ratioValue, 0.0, 1.0);
     if (!stableState.isInitialized) {
         stableState.isInitialized = true;
-        if (clampedRatioValue <= kZeroSnapInRatio) {
-            stableState.stableRatio = 0.0;
-            stableState.zeroSnapActive = true;
-            return 0.0;
-        }
-        if (clampedRatioValue >= kOneSnapInRatio) {
-            stableState.stableRatio = 1.0;
-            stableState.oneSnapActive = true;
-            return 1.0;
-        }
         stableState.stableRatio = clampedRatioValue;
         return stableState.stableRatio;
     }
 
-    if (stableState.zeroSnapActive) {
-        if (clampedRatioValue <= kZeroSnapOutRatio) {
-            stableState.stableRatio = 0.0;
-            return 0.0;
-        }
-        stableState.zeroSnapActive = false;
-    }
-
-    if (stableState.oneSnapActive) {
-        if (clampedRatioValue >= kOneSnapOutRatio) {
-            stableState.stableRatio = 1.0;
-            return 1.0;
-        }
-        stableState.oneSnapActive = false;
-    }
-
     const double previousStableRatio = stableState.stableRatio;
     const double deltaRatioValue = std::abs(clampedRatioValue - previousStableRatio);
-    double stabilizedRatioValue = previousStableRatio;
-    if (deltaRatioValue > deadbandRatio) {
-        const double alphaValue = (deltaRatioValue < kLargeMoveThresholdRatio) ? kSmallMoveAlpha : kLargeMoveAlpha;
-        stabilizedRatioValue = previousStableRatio + (clampedRatioValue - previousStableRatio) * alphaValue;
+    if (deltaRatioValue <= deadbandRatio) {
+        return previousStableRatio;
     }
 
-    stabilizedRatioValue = clampValue(stabilizedRatioValue, 0.0, 1.0);
-    if (stabilizedRatioValue <= kZeroSnapInRatio) {
-        stableState.stableRatio = 0.0;
-        stableState.zeroSnapActive = true;
-        stableState.oneSnapActive = false;
-        return 0.0;
-    }
-    if (stabilizedRatioValue >= kOneSnapInRatio) {
-        stableState.stableRatio = 1.0;
-        stableState.zeroSnapActive = false;
-        stableState.oneSnapActive = true;
-        return 1.0;
-    }
-
-    stableState.stableRatio = stabilizedRatioValue;
-    stableState.zeroSnapActive = false;
-    stableState.oneSnapActive = false;
+    stableState.stableRatio = clampedRatioValue;
     return stableState.stableRatio;
 }
 

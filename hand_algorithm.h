@@ -55,8 +55,6 @@ private:
     struct RatioStableState {
         bool isInitialized = false;
         double stableRatio = 0.0;
-        bool zeroSnapActive = false;
-        bool oneSnapActive = false;
     };
 
     struct RawFilterState {

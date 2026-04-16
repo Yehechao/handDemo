@@ -38,24 +38,7 @@ constexpr double kOneEuroFlexBeta = 0.015;
 // ==================== 4. ratio 稳定层参数 ====================
 
 // kFlexDeadbandRatio: 弯曲 ratio 的死区。
-constexpr double kFlexDeadbandRatio = 0.010;
-
-// kSmallMoveAlpha: 小幅动作时稳定层的平滑系数。
-constexpr double kSmallMoveAlpha = 0.22;
-
-// kLargeMoveAlpha: 大幅动作时稳定层的平滑系数。
-constexpr double kLargeMoveAlpha = 0.60;
-
-// kLargeMoveThresholdRatio: 区分“小动作”和“大动作”的阈值。
-constexpr double kLargeMoveThresholdRatio = 0.08;
-
-// kZeroSnapInRatio/kZeroSnapOutRatio: 接近 0 时的吸附阈值。
-constexpr double kZeroSnapInRatio = 0.012;
-constexpr double kZeroSnapOutRatio = 0.028;
-
-// kOneSnapInRatio/kOneSnapOutRatio: 接近 1 时的吸附阈值。
-constexpr double kOneSnapInRatio = 0.988;
-constexpr double kOneSnapOutRatio = 0.972;
+constexpr double kFlexDeadbandRatio = 0.03;
 
 // ==================== 5. 弯曲补偿参数 ====================
 
