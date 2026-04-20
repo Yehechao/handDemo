@@ -366,5 +366,6 @@ x64/
 .vs/
 build_cmake_check/
 build/
+*.sln
 *.vcxproj
 *.filters
