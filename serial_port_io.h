@@ -1,5 +1,8 @@
-#pragma once
+﻿#pragma once
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #include <array>
@@ -34,6 +37,10 @@ private:
     HANDLE serialHandle_ = INVALID_HANDLE_VALUE;
     std::string currentPortNameText_;
     std::string receiveBuffer_;
+    uint16_t expectedFrameLengthValue_ = 0;
+    bool hasExpectedFrameLengthValue_ = false;
+    uint8_t expectedDataTypeValue_ = 0;
+    bool hasExpectedDataTypeValue_ = false;
     bool hasLoggedFirstFrame_ = false;
     std::chrono::steady_clock::time_point lastSearchLogTimePoint_{};
     std::chrono::steady_clock::time_point lastNoFrameLogTimePoint_{};

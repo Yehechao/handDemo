@@ -259,7 +259,7 @@ std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueL
         return rawFilterState_.filteredValueList;
     }
 
-    // 实时均值滤波只统计“历史帧 + 当前帧”的窗口平均值。
+    // 串口输入层不做平滑，算法内部保留“前 14 帧 + 当前帧”的 15 帧实时均值窗口。
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
         rawFilterState_.filteredValueList[channelIndex] = rawFilterState_.sumValueList[channelIndex] / frameCountValue;
     }

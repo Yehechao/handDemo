@@ -1,4 +1,4 @@
-#include "serial_port_io.h"
+﻿#include "serial_port_io.h"
 
 #include <algorithm>
 #include <setupapi.h>
@@ -21,18 +21,43 @@ enum class ReadFrameResult {
     Disconnected = 2,
 };
 
-// hardwareIdText: 串口接收器内部固定查找的目标硬件 VID/PID
-constexpr wchar_t hardwareIdText[] = L"USB\\VID_1A86&PID_7523";
-// baudRateValue: 串口接收器内部固定波特率
-constexpr DWORD baudRateValue = 460800;
+// hardwareIdText: 对齐 Python 项目 config.json，当前目标硬件固定为 STM32 虚拟串口
+constexpr wchar_t hardwareIdText[] = L"USB\\VID_0483&PID_5740";
+// baudRateValue: Python 侧没有显式设置波特率，虚拟串口场景这里用常见默认值即可
+constexpr DWORD baudRateValue = 9600;
 // reconnectDelayMs: 未连接或断开后的重试间隔
 constexpr int reconnectDelayMs = 100;
-// idleSleepMs: 无新数据时的短暂休眠
-constexpr int idleSleepMs = 2;
+// maxReadCycleCountPerPoll: 每次轮询尽量多读几次，把驱动层已到达的数据尽快吃干净。
+constexpr int maxReadCycleCountPerPoll = 32;
 // searchLogIntervalMs: 未找到目标串口时的提示节流间隔
 constexpr int searchLogIntervalMs = 3000;
 // noFrameLogIntervalMs: 连续无有效帧时的提示阈值
 constexpr int noFrameLogIntervalMs = 5000;
+// frameHeaderByteList: Python 项目里使用的固定二进制帧头，小端字节序为 A5 5A
+constexpr char frameHeaderByteList[] = {
+    static_cast<char>(0xA5),
+    static_cast<char>(0x5A),
+};
+// expectedFrameTypeValue: 当前协议固定帧类型
+constexpr uint8_t expectedFrameTypeValue = 0x01;
+// oldDataTypeValue/newDataTypeValue: 当前兼容的两种数据类型
+constexpr uint8_t oldDataTypeValue = 0x01;
+constexpr uint8_t newDataTypeValue = 0x70;
+// pressureSensorByteCount: 压感区总字节数，当前版本先跳过不用
+constexpr std::size_t pressureSensorByteCount = 23U * 20U;
+// freedomAngleValueCount: 自由度角度总数，最后 1 路仍保留占位
+constexpr std::size_t freedomAngleValueCount = 19U;
+// rotationAngleValueCount: 姿态角总数，当前版本先跳过不用
+constexpr std::size_t rotationAngleValueCount = 3U;
+// frameMetaByteCount: 帧头、帧类型、帧长度、数据类型一共 6 字节
+constexpr std::size_t frameMetaByteCount = 2U + 1U + 2U + 1U;
+// freedomAngleOffset/checksumOffset/frameByteCount: 二进制协议固定布局
+constexpr std::size_t freedomAngleOffset = frameMetaByteCount + pressureSensorByteCount;
+constexpr std::size_t rotationAngleOffset = freedomAngleOffset + freedomAngleValueCount * sizeof(int16_t);
+constexpr std::size_t checksumOffset = rotationAngleOffset + rotationAngleValueCount * sizeof(int16_t);
+constexpr std::size_t frameByteCount = checksumOffset + sizeof(uint16_t);
+// maxReceiveBufferByteCount: 接收缓冲区上限，避免错误字节流无限增长
+constexpr std::size_t maxReceiveBufferByteCount = 65536U;
 
 std::wstring toUpperText(const std::wstring& rawText) {
     std::wstring upperText = rawText;
@@ -208,27 +233,105 @@ std::wstring getPortName(HDEVINFO deviceInfoList, SP_DEVINFO_DATA& deviceInfoDat
     return portName;
 }
 
-bool parseFrameLine(const std::string& lineText, std::array<int16_t, kChannelCount>& frameValueList) {
-    std::stringstream lineStream(lineText);
-    std::string partText;
-    std::size_t channelIndex = 0;
-    while (std::getline(lineStream, partText, ',')) {
-        if (channelIndex >= kChannelCount) {
-            return false;
-        }
+const std::string& getFrameHeaderText() {
+    static const std::string frameHeaderText(frameHeaderByteList, sizeof(frameHeaderByteList));
+    return frameHeaderText;
+}
 
-        try {
-            const int channelValue = std::stoi(partText);
-            if (channelValue < kAdMinValue || channelValue > kAdMaxValue) {
-                return false;
-            }
-            frameValueList[channelIndex] = static_cast<int16_t>(channelValue);
-        } catch (...) {
+bool isSupportedDataTypeValue(uint8_t dataTypeValue) {
+    return dataTypeValue == oldDataTypeValue || dataTypeValue == newDataTypeValue;
+}
+
+uint16_t readUint16LittleEndian(const std::string& bufferText, std::size_t offsetValue) {
+    const uint8_t lowByteValue = static_cast<uint8_t>(bufferText[offsetValue]);
+    const uint8_t highByteValue = static_cast<uint8_t>(bufferText[offsetValue + 1U]);
+    return static_cast<uint16_t>(lowByteValue | (static_cast<uint16_t>(highByteValue) << 8U));
+}
+
+int16_t readInt16LittleEndian(const std::string& bufferText, std::size_t offsetValue) {
+    return static_cast<int16_t>(readUint16LittleEndian(bufferText, offsetValue));
+}
+
+uint16_t computeFrameChecksum(const std::string& frameText) {
+    uint32_t checksumValue = 0;
+    for (std::size_t byteIndex = 0; byteIndex < checksumOffset; ++byteIndex) {
+        checksumValue += static_cast<uint8_t>(frameText[byteIndex]);
+    }
+    return static_cast<uint16_t>(checksumValue & 0xFFFFU);
+}
+
+std::size_t findFrameHeaderIndex(const std::string& receiveBuffer) {
+    return receiveBuffer.find(getFrameHeaderText());
+}
+
+void trimProtocolReceiveBuffer(std::string& receiveBuffer) {
+    if (receiveBuffer.size() <= maxReceiveBufferByteCount) {
+        return;
+    }
+
+    const std::size_t frameHeaderIndex = receiveBuffer.rfind(getFrameHeaderText());
+    if (frameHeaderIndex != std::string::npos) {
+        std::string trimmedBuffer = receiveBuffer.substr(frameHeaderIndex);
+        if (trimmedBuffer.size() <= maxReceiveBufferByteCount) {
+            receiveBuffer.swap(trimmedBuffer);
+            return;
+        }
+    }
+
+    const std::size_t keepByteCount = std::max(frameByteCount * 2U, maxReceiveBufferByteCount / 2U);
+    receiveBuffer.erase(0, receiveBuffer.size() - keepByteCount);
+}
+
+bool parseProtocolFrame(
+    const std::string& frameText,
+    bool hasExpectedFrameLengthValue,
+    uint16_t expectedFrameLengthValue,
+    bool hasExpectedDataTypeValue,
+    uint8_t expectedDataTypeValue,
+    std::array<int16_t, kChannelCount>& frameValueList,
+    uint16_t& parsedFrameLengthValue,
+    uint8_t& parsedDataTypeValue) {
+    if (frameText.size() != frameByteCount) {
+        return false;
+    }
+
+    if (frameText.compare(0, getFrameHeaderText().size(), getFrameHeaderText()) != 0) {
+        return false;
+    }
+
+    if (static_cast<uint8_t>(frameText[2]) != expectedFrameTypeValue) {
+        return false;
+    }
+
+    parsedFrameLengthValue = readUint16LittleEndian(frameText, 3U);
+    if (parsedFrameLengthValue == 0U) {
+        return false;
+    }
+    if (hasExpectedFrameLengthValue && parsedFrameLengthValue != expectedFrameLengthValue) {
+        return false;
+    }
+
+    parsedDataTypeValue = static_cast<uint8_t>(frameText[5]);
+    if (!isSupportedDataTypeValue(parsedDataTypeValue)) {
+        return false;
+    }
+    if (hasExpectedDataTypeValue && parsedDataTypeValue != expectedDataTypeValue) {
+        return false;
+    }
+
+    const uint16_t actualChecksumValue = readUint16LittleEndian(frameText, checksumOffset);
+    if (actualChecksumValue != computeFrameChecksum(frameText)) {
+        return false;
+    }
+
+    for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
+        const int16_t channelValue = readInt16LittleEndian(frameText, freedomAngleOffset + channelIndex * sizeof(int16_t));
+        if (channelValue < kAdMinValue || channelValue > kAdMaxValue) {
             return false;
         }
-        ++channelIndex;
+        frameValueList[channelIndex] = channelValue;
     }
-    return channelIndex == kChannelCount;
+    return true;
 }
 
 std::string toUtf8String(const std::wstring& wideText) {
@@ -262,6 +365,33 @@ std::string toUtf8String(const std::wstring& wideText) {
     return utf8Text;
 }
 
+std::string getLastErrorMessageText(DWORD errorCodeValue) {
+    LPWSTR wideMessageBuffer = nullptr;
+    const DWORD messageLength = FormatMessageW(
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        nullptr,
+        errorCodeValue,
+        MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        reinterpret_cast<LPWSTR>(&wideMessageBuffer),
+        0,
+        nullptr);
+    if (messageLength == 0 || wideMessageBuffer == nullptr) {
+        return "未知错误";
+    }
+
+    std::wstring wideMessageText(wideMessageBuffer, messageLength);
+    LocalFree(wideMessageBuffer);
+    while (!wideMessageText.empty()) {
+        const wchar_t lastChar = wideMessageText.back();
+        if (lastChar == L'\r' || lastChar == L'\n' || lastChar == L' ') {
+            wideMessageText.pop_back();
+            continue;
+        }
+        break;
+    }
+    return toUtf8String(wideMessageText);
+}
+
 std::wstring findMatchedPortName(const std::wstring& targetHardwareIdText) {
     const std::wstring normalizedTargetHardwareId = normalizeHardwareId(targetHardwareIdText);
     HDEVINFO deviceInfoList = SetupDiGetClassDevsW(&GUID_DEVCLASS_PORTS, nullptr, nullptr, DIGCF_PRESENT);
@@ -288,7 +418,7 @@ std::wstring findMatchedPortName(const std::wstring& targetHardwareIdText) {
     return matchedPortName;
 }
 
-HANDLE openSerialPort(const std::wstring& portName, DWORD baudRateValue) {
+HANDLE openSerialPort(const std::wstring& portName, DWORD baudRateValue, std::string& errorMessageText) {
     const std::wstring fullPortName = L"\\\\.\\" + portName;
     HANDLE serialHandle = CreateFileW(
         fullPortName.c_str(),
@@ -296,16 +426,24 @@ HANDLE openSerialPort(const std::wstring& portName, DWORD baudRateValue) {
         0,
         nullptr,
         OPEN_EXISTING,
-        0,
+        FILE_ATTRIBUTE_NORMAL,
         nullptr);
     if (serialHandle == INVALID_HANDLE_VALUE) {
+        const DWORD errorCodeValue = GetLastError();
+        errorMessageText =
+            "CreateFileW 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
         return INVALID_HANDLE_VALUE;
     }
 
     DCB deviceControlBlock{};
     deviceControlBlock.DCBlength = sizeof(DCB);
     if (!GetCommState(serialHandle, &deviceControlBlock)) {
+        const DWORD errorCodeValue = GetLastError();
         CloseHandle(serialHandle);
+        errorMessageText =
+            "GetCommState 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
         return INVALID_HANDLE_VALUE;
     }
 
@@ -315,64 +453,128 @@ HANDLE openSerialPort(const std::wstring& portName, DWORD baudRateValue) {
     deviceControlBlock.StopBits = ONESTOPBIT;
     deviceControlBlock.fBinary = TRUE;
     deviceControlBlock.fParity = FALSE;
+    deviceControlBlock.fOutxCtsFlow = FALSE;
+    deviceControlBlock.fOutxDsrFlow = FALSE;
+    deviceControlBlock.fDtrControl = DTR_CONTROL_ENABLE;
+    deviceControlBlock.fDsrSensitivity = FALSE;
+    deviceControlBlock.fTXContinueOnXoff = TRUE;
+    deviceControlBlock.fOutX = FALSE;
+    deviceControlBlock.fInX = FALSE;
+    deviceControlBlock.fErrorChar = FALSE;
+    deviceControlBlock.fNull = FALSE;
+    deviceControlBlock.fRtsControl = RTS_CONTROL_ENABLE;
+    deviceControlBlock.fAbortOnError = FALSE;
     if (!SetCommState(serialHandle, &deviceControlBlock)) {
+        const DWORD errorCodeValue = GetLastError();
         CloseHandle(serialHandle);
+        errorMessageText =
+            "SetCommState 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
         return INVALID_HANDLE_VALUE;
     }
 
     COMMTIMEOUTS timeouts{};
-    timeouts.ReadIntervalTimeout = 1;
+    timeouts.ReadIntervalTimeout = MAXDWORD;
     timeouts.ReadTotalTimeoutMultiplier = 0;
-    timeouts.ReadTotalTimeoutConstant = 1;
+    timeouts.ReadTotalTimeoutConstant = 0;
     timeouts.WriteTotalTimeoutMultiplier = 0;
-    timeouts.WriteTotalTimeoutConstant = 5;
+    timeouts.WriteTotalTimeoutConstant = 0;
     if (!SetCommTimeouts(serialHandle, &timeouts)) {
+        const DWORD errorCodeValue = GetLastError();
         CloseHandle(serialHandle);
+        errorMessageText =
+            "SetCommTimeouts 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
         return INVALID_HANDLE_VALUE;
     }
 
-    SetupComm(serialHandle, 4096, 4096);
-    PurgeComm(serialHandle, PURGE_RXCLEAR | PURGE_TXCLEAR);
+    if (!SetupComm(serialHandle, 4096, 4096)) {
+        const DWORD errorCodeValue = GetLastError();
+        CloseHandle(serialHandle);
+        errorMessageText =
+            "SetupComm 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    if (!PurgeComm(serialHandle, PURGE_RXCLEAR | PURGE_TXCLEAR | PURGE_RXABORT | PURGE_TXABORT)) {
+        const DWORD errorCodeValue = GetLastError();
+        CloseHandle(serialHandle);
+        errorMessageText =
+            "PurgeComm 失败，错误码=" + std::to_string(errorCodeValue) +
+            "，原因=" + getLastErrorMessageText(errorCodeValue);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    errorMessageText.clear();
     return serialHandle;
 }
 
 ReadFrameResult tryReadLatestFrame(
     HANDLE serialHandle,
     std::string& receiveBuffer,
+    bool& hasExpectedFrameLengthValue,
+    uint16_t& expectedFrameLengthValue,
+    bool& hasExpectedDataTypeValue,
+    uint8_t& expectedDataTypeValue,
     std::array<int16_t, kChannelCount>& latestFrameValueList) {
     char tempBuffer[512];
-    DWORD readByteCount = 0;
-    if (!ReadFile(serialHandle, tempBuffer, static_cast<DWORD>(sizeof(tempBuffer)), &readByteCount, nullptr)) {
-        return ReadFrameResult::Disconnected;
-    }
-
-    if (readByteCount > 0) {
-        receiveBuffer.append(tempBuffer, tempBuffer + readByteCount);
-        if (receiveBuffer.size() > 65536) {
-            const std::size_t lineIndex = receiveBuffer.find_last_of('\n');
-            if (lineIndex != std::string::npos) {
-                receiveBuffer = receiveBuffer.substr(lineIndex + 1);
-            } else {
-                receiveBuffer = receiveBuffer.substr(receiveBuffer.size() / 2);
-            }
+    for (int readCycleIndex = 0; readCycleIndex < maxReadCycleCountPerPoll; ++readCycleIndex) {
+        DWORD readByteCount = 0;
+        if (!ReadFile(serialHandle, tempBuffer, static_cast<DWORD>(sizeof(tempBuffer)), &readByteCount, nullptr)) {
+            return ReadFrameResult::Disconnected;
         }
+
+        if (readByteCount == 0) {
+            break;
+        }
+
+        receiveBuffer.append(tempBuffer, tempBuffer + readByteCount);
+        trimProtocolReceiveBuffer(receiveBuffer);
     }
 
     bool hasValidFrame = false;
-    std::size_t lineEndIndex = receiveBuffer.find('\n');
-    while (lineEndIndex != std::string::npos) {
-        std::string lineText = receiveBuffer.substr(0, lineEndIndex);
-        receiveBuffer.erase(0, lineEndIndex + 1);
-        if (!lineText.empty() && lineText.back() == '\r') {
-            lineText.pop_back();
+    std::size_t frameHeaderIndex = findFrameHeaderIndex(receiveBuffer);
+    while (frameHeaderIndex != std::string::npos) {
+        if (frameHeaderIndex > 0U) {
+            receiveBuffer.erase(0, frameHeaderIndex);
         }
 
-        std::array<int16_t, kChannelCount> parsedFrameValueList{};
-        if (!lineText.empty() && parseFrameLine(lineText, parsedFrameValueList)) {
-            latestFrameValueList = parsedFrameValueList;
-            hasValidFrame = true;
+        if (receiveBuffer.size() < frameByteCount) {
+            break;
         }
-        lineEndIndex = receiveBuffer.find('\n');
+
+        std::string candidateFrameText = receiveBuffer.substr(0, frameByteCount);
+        std::array<int16_t, kChannelCount> parsedFrameValueList{};
+        uint16_t parsedFrameLengthValue = 0;
+        uint8_t parsedDataTypeValue = 0;
+        if (!parseProtocolFrame(
+                candidateFrameText,
+                hasExpectedFrameLengthValue,
+                expectedFrameLengthValue,
+                hasExpectedDataTypeValue,
+                expectedDataTypeValue,
+                parsedFrameValueList,
+                parsedFrameLengthValue,
+                parsedDataTypeValue)) {
+            receiveBuffer.erase(0, 1);
+            frameHeaderIndex = findFrameHeaderIndex(receiveBuffer);
+            continue;
+        }
+
+        if (!hasExpectedFrameLengthValue) {
+            expectedFrameLengthValue = parsedFrameLengthValue;
+            hasExpectedFrameLengthValue = true;
+        }
+        if (!hasExpectedDataTypeValue) {
+            expectedDataTypeValue = parsedDataTypeValue;
+            hasExpectedDataTypeValue = true;
+        }
+
+        latestFrameValueList = parsedFrameValueList;
+        hasValidFrame = true;
+        receiveBuffer.erase(0, frameByteCount);
+        frameHeaderIndex = findFrameHeaderIndex(receiveBuffer);
     }
 
     return hasValidFrame ? ReadFrameResult::HasFrame : ReadFrameResult::NoFrame;
@@ -398,6 +600,10 @@ void SerialFrameReceiver::closePort() {
     }
     currentPortNameText_.clear();
     receiveBuffer_.clear();
+    expectedFrameLengthValue_ = 0;
+    hasExpectedFrameLengthValue_ = false;
+    expectedDataTypeValue_ = 0;
+    hasExpectedDataTypeValue_ = false;
     hasLoggedFirstFrame_ = false;
 }
 
@@ -417,16 +623,23 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
             return pollResult;
         }
 
-        serialHandle_ = openSerialPort(matchedPortName, baudRateValue);
+        std::string openErrorMessageText;
+        serialHandle_ = openSerialPort(matchedPortName, baudRateValue, openErrorMessageText);
         if (serialHandle_ == INVALID_HANDLE_VALUE) {
             pollResult.hasStatusMessage = true;
-            pollResult.statusMessage = "打开串口失败: " + toUtf8String(matchedPortName);
+            pollResult.statusMessage =
+                "打开串口失败: " + toUtf8String(matchedPortName) +
+                "，" + openErrorMessageText;
             std::this_thread::sleep_for(std::chrono::milliseconds(reconnectDelayMs));
             return pollResult;
         }
 
         currentPortNameText_ = toUtf8String(matchedPortName);
         receiveBuffer_.clear();
+        expectedFrameLengthValue_ = 0;
+        hasExpectedFrameLengthValue_ = false;
+        expectedDataTypeValue_ = 0;
+        hasExpectedDataTypeValue_ = false;
         hasLoggedFirstFrame_ = false;
         lastNoFrameLogTimePoint_ = currentTimePoint;
         lastValidFrameTimePoint_ = currentTimePoint;
@@ -435,7 +648,14 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
         return pollResult;
     }
 
-    const ReadFrameResult readResult = tryReadLatestFrame(serialHandle_, receiveBuffer_, latestFrameValueList);
+    const ReadFrameResult readResult = tryReadLatestFrame(
+        serialHandle_,
+        receiveBuffer_,
+        hasExpectedFrameLengthValue_,
+        expectedFrameLengthValue_,
+        hasExpectedDataTypeValue_,
+        expectedDataTypeValue_,
+        latestFrameValueList);
     if (readResult == ReadFrameResult::Disconnected) {
         closePort();
         pollResult.hasStatusMessage = true;
@@ -469,7 +689,6 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
         lastNoFrameLogTimePoint_ = currentTimePoint;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(idleSleepMs));
     return pollResult;
 }
 

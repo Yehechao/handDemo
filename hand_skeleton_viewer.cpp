@@ -468,7 +468,7 @@ int HandSkeletonViewer::showWindowFrame() {
     }
 
     cv::imshow(windowNameText_, buildCanvasImage());
-    return cv::waitKey(8);
+    return cv::waitKey(1);
 }
 
 bool HandSkeletonViewer::shouldQuitFromKey(int keyValue) const {

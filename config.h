@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <cstddef>
@@ -26,8 +26,9 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
 // ==================== 3. 均值滤波参数 ====================
 
-// kMeanFilterHistoryFrameCount: 均值滤波收集的历史帧数。
-constexpr std::size_t kMeanFilterHistoryFrameCount = 10;
+// kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数。
+// 当前按“前 14 帧 + 当前帧 = 15 帧总窗口”处理。
+constexpr std::size_t kMeanFilterHistoryFrameCount = 14;
 
 // kMeanFilterWindowFrameCount: 均值滤波总窗口大小。
 constexpr std::size_t kMeanFilterWindowFrameCount =
@@ -41,7 +42,8 @@ constexpr double kFlexDeadbandRatio = 0.03;
 // ==================== 5. 弯曲补偿参数 ====================
 
 // kEnableFlexCompensation: 是否启用弯曲弱通道补偿。
-constexpr bool kEnableFlexCompensation = true;
+// 当前版本默认关闭，避免把弱通道的小幅噪声放大。
+constexpr bool kEnableFlexCompensation = false;
 
 // kFlexWeakThresholdRatio: 弯曲通道被判定为偏弱的阈值比例。
 constexpr double kFlexWeakThresholdRatio = 0.85;
