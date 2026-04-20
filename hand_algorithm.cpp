@@ -36,15 +36,6 @@ int toChannelArrayIndex(int channelIndex) {
     return channelIndex - 1;
 }
 
-bool isFlexChannel(int channelIndex) {
-    for (int flexChannelIndex : kFlexChannelIndexList) {
-        if (flexChannelIndex == channelIndex) {
-            return true;
-        }
-    }
-    return false;
-}
-
 double calculateChannelRatio(double currentValue, double startValue, double endValue) {
     // 弯曲通道统一采用单向正向模型：
     // Closed 是 0 度基线，只有当前值高于 Closed 才允许产生弯曲。
@@ -87,10 +78,9 @@ void HandAngleAlgorithm::resetSamplingState() {
 }
 
 void HandAngleAlgorithm::resetFilterState() {
-    rawFilterState_.isInitialized = false;
     rawFilterState_.filteredValueList.fill(0.0);
-    rawFilterState_.previousRawValueList.fill(0.0);
-    rawFilterState_.derivativeValueList.fill(0.0);
+    rawFilterState_.sumValueList.fill(0.0);
+    rawFilterState_.frameWindowList.clear();
 
     for (auto& stableState : flexStableStateByChannel_) {
         stableState = {};
@@ -244,62 +234,40 @@ void HandAngleAlgorithm::rebuildChannelCompensation() {
     }
 }
 
-double HandAngleAlgorithm::computeOneEuroAlpha(double cutoffValue, double deltaTimeSecond) const {
-    const double safeCutoffValue = std::max(0.0001, cutoffValue);
-    const double safeDeltaTimeSecond = std::max(0.0001, deltaTimeSecond);
-    const double tauValue = 1.0 / (2.0 * 3.14159265358979323846 * safeCutoffValue);
-    return 1.0 / (1.0 + tauValue / safeDeltaTimeSecond);
-}
-
-std::array<double, kChannelCount> HandAngleAlgorithm::getOneEuroFilteredFrameValueList(const int16_t adValues[kChannelCount]) {
+std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]) {
     std::array<double, kChannelCount> currentFrameValueList{};
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
         currentFrameValueList[channelIndex] = static_cast<double>(adValues[channelIndex]);
     }
 
-    const auto currentTimePoint = std::chrono::steady_clock::now();
-    if (!rawFilterState_.isInitialized) {
-        rawFilterState_.isInitialized = true;
+    rawFilterState_.frameWindowList.push_back(currentFrameValueList);
+    for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
+        rawFilterState_.sumValueList[channelIndex] += currentFrameValueList[channelIndex];
+    }
+
+    if (rawFilterState_.frameWindowList.size() > kMeanFilterWindowFrameCount) {
+        const auto& expiredFrameValueList = rawFilterState_.frameWindowList.front();
+        for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
+            rawFilterState_.sumValueList[channelIndex] -= expiredFrameValueList[channelIndex];
+        }
+        rawFilterState_.frameWindowList.pop_front();
+    }
+
+    const double frameCountValue = static_cast<double>(rawFilterState_.frameWindowList.size());
+    if (frameCountValue <= 0.0) {
         rawFilterState_.filteredValueList = currentFrameValueList;
-        rawFilterState_.previousRawValueList = currentFrameValueList;
-        rawFilterState_.derivativeValueList.fill(0.0);
-        rawFilterState_.lastTimePoint = currentTimePoint;
         return rawFilterState_.filteredValueList;
     }
 
-    const double rawDeltaTimeSecond = std::chrono::duration<double>(currentTimePoint - rawFilterState_.lastTimePoint).count();
-    const double deltaTimeSecond = clampValue(rawDeltaTimeSecond, 0.001, 0.1);
-    const double derivativeAlphaValue = computeOneEuroAlpha(kOneEuroDerivativeCutoff, deltaTimeSecond);
-
+    // 实时均值滤波只统计“历史帧 + 当前帧”的窗口平均值。
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
-        const int humanChannelIndex = static_cast<int>(channelIndex + 1U);
-        const double currentValue = currentFrameValueList[channelIndex];
-        if (!isFlexChannel(humanChannelIndex)) {
-            rawFilterState_.derivativeValueList[channelIndex] = 0.0;
-            rawFilterState_.filteredValueList[channelIndex] = currentValue;
-            continue;
-        }
-
-        const double previousRawValue = rawFilterState_.previousRawValueList[channelIndex];
-        const double previousFilteredValue = rawFilterState_.filteredValueList[channelIndex];
-        const double currentDerivativeValue = (currentValue - previousRawValue) / deltaTimeSecond;
-        const double filteredDerivativeValue = rawFilterState_.derivativeValueList[channelIndex] +
-            derivativeAlphaValue * (currentDerivativeValue - rawFilterState_.derivativeValueList[channelIndex]);
-        const double adaptiveCutoffValue = kOneEuroFlexMinCutoff + kOneEuroFlexBeta * std::abs(filteredDerivativeValue);
-        const double valueAlphaValue = computeOneEuroAlpha(adaptiveCutoffValue, deltaTimeSecond);
-
-        rawFilterState_.derivativeValueList[channelIndex] = filteredDerivativeValue;
-        rawFilterState_.filteredValueList[channelIndex] =
-            previousFilteredValue + valueAlphaValue * (currentValue - previousFilteredValue);
+        rawFilterState_.filteredValueList[channelIndex] = rawFilterState_.sumValueList[channelIndex] / frameCountValue;
     }
-
-    rawFilterState_.previousRawValueList = currentFrameValueList;
-    rawFilterState_.lastTimePoint = currentTimePoint;
     return rawFilterState_.filteredValueList;
 }
 
 std::array<double, kChannelCount> HandAngleAlgorithm::filterFrameValueList(const int16_t adValues[kChannelCount]) {
-    return getOneEuroFilteredFrameValueList(adValues);
+    return getMeanFilteredFrameValueList(adValues);
 }
 
 double HandAngleAlgorithm::stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio) {

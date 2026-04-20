@@ -1,8 +1,8 @@
 ﻿#pragma once
 
 #include <array>
-#include <chrono>
 #include <cstdint>
+#include <deque>
 
 #include "config.h"
 
@@ -58,11 +58,9 @@ private:
     };
 
     struct RawFilterState {
-        bool isInitialized = false;
         std::array<double, kChannelCount> filteredValueList{};
-        std::array<double, kChannelCount> previousRawValueList{};
-        std::array<double, kChannelCount> derivativeValueList{};
-        std::chrono::steady_clock::time_point lastTimePoint{};
+        std::array<double, kChannelCount> sumValueList{};
+        std::deque<std::array<double, kChannelCount>> frameWindowList;
     };
 
     void resetFilterState();
@@ -75,14 +73,13 @@ private:
     void rebuildChannelCompensation();
 
     std::array<double, kChannelCount> filterFrameValueList(const int16_t adValues[kChannelCount]);
-    std::array<double, kChannelCount> getOneEuroFilteredFrameValueList(const int16_t adValues[kChannelCount]);
+    std::array<double, kChannelCount> getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]);
 
     double getFlexRatio(int channelIndex, double currentValue);
     void buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue);
 
     double stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio);
     double applyCompensationRatio(double ratioValue, const CompensationState& compensationState, double curveBlendRatio) const;
-    double computeOneEuroAlpha(double cutoffValue, double deltaTimeSecond) const;
 
     std::array<double, kChannelCount> closedCalibrationValueList_{};
     std::array<double, kChannelCount> fistCalibrationValueList_{};

@@ -362,9 +362,7 @@ MigrationBackup/
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
 AGENTS.md
-handDemo.vcxproj.filters
-handDemo.vcxproj
 x64/
 .vs/
-*.sln
 build_cmake_check/
+build/

@@ -24,16 +24,14 @@ constexpr int kSamplingDurationMs = 2000;
 // kMaxSamplingFrameCount: 单次校准允许缓存的最大帧数。
 constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
-// ==================== 3. One Euro 滤波参数 ====================
+// ==================== 3. 均值滤波参数 ====================
 
-// kOneEuroDerivativeCutoff: One Euro 导数滤波截止频率。
-constexpr double kOneEuroDerivativeCutoff = 10.0;
+// kMeanFilterHistoryFrameCount: 均值滤波收集的历史帧数。
+constexpr std::size_t kMeanFilterHistoryFrameCount = 10;
 
-// kOneEuroFlexMinCutoff: 弯曲通道的最小截止频率。
-constexpr double kOneEuroFlexMinCutoff = 70.0;
-
-// kOneEuroFlexBeta: 弯曲通道的动态响应系数。
-constexpr double kOneEuroFlexBeta = 0.015;
+// kMeanFilterWindowFrameCount: 均值滤波总窗口大小。
+constexpr std::size_t kMeanFilterWindowFrameCount =
+    kMeanFilterHistoryFrameCount + 1;
 
 // ==================== 4. ratio 稳定层参数 ====================
 
