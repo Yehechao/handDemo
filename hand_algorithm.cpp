@@ -1,9 +1,7 @@
 #include "hand_algorithm.h"
 
-#include <algorithm>
 #include <cmath>
 #include <limits>
-#include <vector>
 
 namespace handdemo {
 
@@ -19,36 +17,24 @@ double clampValue(double rawValue, double minValue, double maxValue) {
     return rawValue;
 }
 
-double calculateMedian(const std::vector<double>& valueList) {
-    if (valueList.empty()) {
-        return 0.0;
-    }
-    std::vector<double> sortedValueList = valueList;
-    std::sort(sortedValueList.begin(), sortedValueList.end());
-    const std::size_t middleIndex = sortedValueList.size() / 2U;
-    if ((sortedValueList.size() % 2U) == 1U) {
-        return sortedValueList[middleIndex];
-    }
-    return (sortedValueList[middleIndex - 1U] + sortedValueList[middleIndex]) * 0.5;
-}
-
 int toChannelArrayIndex(int channelIndex) {
     return channelIndex - 1;
 }
 
 double calculateChannelRatio(double currentValue, double startValue, double endValue) {
-    // 弯曲通道统一采用单向正向模型：
-    // Closed 是 0 度基线，只有当前值高于 Closed 才允许产生弯曲。
+    // 对齐 Python calculateChannelRatio：
+    // Closed 是 0 比例基线，Fist/Spread 是 1 比例上限。
+    if (endValue <= startValue + 1.0) {
+        return 0.0;
+    }
     if (currentValue <= startValue) {
         return 0.0;
     }
-
-    const double deltaValue = endValue - startValue;
-    if (deltaValue <= 1.0) {
-        return 0.0;
+    if (currentValue >= endValue) {
+        return 1.0;
     }
-
-    return clampValue((currentValue - startValue) / deltaValue, 0.0, 1.0);
+    const double ratioValue = (currentValue - startValue) / (endValue - startValue);
+    return clampValue(ratioValue, 0.0, 1.0);
 }
 
 float convertAngleToFloat(double degreeValue) {
@@ -85,22 +71,22 @@ void HandAngleAlgorithm::resetFilterState() {
     for (auto& stableState : flexStableStateByChannel_) {
         stableState = {};
     }
-}
-
-void HandAngleAlgorithm::resetCompensationState() {
-    for (auto& compensationState : flexCompensationStateByChannel_) {
-        compensationState = {};
+    for (auto& stableState : spreadStableStateByChannel_) {
+        stableState = {};
     }
+    thumbGateStableState_ = {};
+    thumbGateFilterDeque_.clear();
 }
 
 void HandAngleAlgorithm::reset() {
     hasClosedCalibration_ = false;
     hasFistCalibration_ = false;
+    hasSpreadCalibration_ = false;
     closedCalibrationValueList_.fill(0.0);
     fistCalibrationValueList_.fill(0.0);
+    spreadCalibrationValueList_.fill(0.0);
     resetSamplingState();
     resetFilterState();
-    resetCompensationState();
 }
 
 void HandAngleAlgorithm::beginCalibration(CalibrationStage stage) {
@@ -140,6 +126,9 @@ std::array<double, kChannelCount> HandAngleAlgorithm::buildStageCalibrationTempl
     if (stage == CalibrationStage::Fist && hasFistCalibration_) {
         return fistCalibrationValueList_;
     }
+    if (stage == CalibrationStage::Spread && hasSpreadCalibration_) {
+        return spreadCalibrationValueList_;
+    }
     if (hasClosedCalibration_) {
         return closedCalibrationValueList_;
     }
@@ -164,15 +153,28 @@ void HandAngleAlgorithm::applyStageCalibrationValue(
         return;
     }
 
-    auto targetValueList = buildStageCalibrationTemplate(CalibrationStage::Fist);
-    if (!hasFistCalibration_) {
-        targetValueList = closedCalibrationValueList_;
+    if (stage == CalibrationStage::Fist) {
+        auto targetValueList = buildStageCalibrationTemplate(CalibrationStage::Fist);
+        if (!hasFistCalibration_) {
+            targetValueList = closedCalibrationValueList_;
+        }
+        for (int channelIndex : kFlexChannelIndexList) {
+            targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
+        }
+        targetValueList[toChannelArrayIndex(16)] = averageValueList[toChannelArrayIndex(16)];
+        targetValueList[toChannelArrayIndex(19)] = averageValueList[toChannelArrayIndex(19)];
+        fistCalibrationValueList_ = targetValueList;
+        hasFistCalibration_ = true;
+        return;
     }
-    for (int channelIndex : kFlexChannelIndexList) {
+
+    // Spread: 以 fist 模板为基底，仅覆盖展开通道
+    auto targetValueList = buildStageCalibrationTemplate(CalibrationStage::Fist);
+    for (int channelIndex : kSpreadChannelIndexList) {
         targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
     }
-    fistCalibrationValueList_ = targetValueList;
-    hasFistCalibration_ = true;
+    spreadCalibrationValueList_ = targetValueList;
+    hasSpreadCalibration_ = true;
 }
 
 bool HandAngleAlgorithm::finishCalibration() {
@@ -183,55 +185,12 @@ bool HandAngleAlgorithm::finishCalibration() {
 
     const auto averageValueList = buildAverageCalibrationFrame();
     applyStageCalibrationValue(samplingState_.stage, averageValueList);
-    rebuildChannelCompensation();
     resetSamplingState();
     return true;
 }
 
 bool HandAngleAlgorithm::isReady() const {
-    return hasClosedCalibration_ && hasFistCalibration_;
-}
-
-void HandAngleAlgorithm::rebuildChannelCompensation() {
-    resetCompensationState();
-
-    if (!kEnableFlexCompensation || !hasClosedCalibration_ || !hasFistCalibration_) {
-        return;
-    }
-
-    std::vector<double> spanValueList;
-    spanValueList.reserve(kFlexChannelIndexList.size());
-    for (int channelIndex : kFlexChannelIndexList) {
-        spanValueList.push_back(std::abs(
-            fistCalibrationValueList_[toChannelArrayIndex(channelIndex)] -
-            closedCalibrationValueList_[toChannelArrayIndex(channelIndex)]));
-    }
-
-    const double referenceSpanValue = calculateMedian(spanValueList);
-    if (referenceSpanValue < 1.0) {
-        return;
-    }
-
-    const double weakThresholdValue = referenceSpanValue * kFlexWeakThresholdRatio;
-    const double minSpanValue = referenceSpanValue * kFlexMinSpanRatio;
-
-    for (int channelIndex : kFlexChannelIndexList) {
-        const double channelSpanValue = std::abs(
-            fistCalibrationValueList_[toChannelArrayIndex(channelIndex)] -
-            closedCalibrationValueList_[toChannelArrayIndex(channelIndex)]);
-        if (channelSpanValue >= weakThresholdValue) {
-            continue;
-        }
-
-        CompensationState compensationState;
-        compensationState.isActive = true;
-        compensationState.boostFactorValue = clampValue(
-            referenceSpanValue / std::max(channelSpanValue, minSpanValue),
-            1.0,
-            kFlexMaxBoostFactor);
-        compensationState.gammaValue = 1.0 / compensationState.boostFactorValue;
-        flexCompensationStateByChannel_[toChannelArrayIndex(channelIndex)] = compensationState;
-    }
+    return hasClosedCalibration_ && hasFistCalibration_ && hasSpreadCalibration_;
 }
 
 std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]) {
@@ -288,19 +247,6 @@ double HandAngleAlgorithm::stabilizeRatio(RatioStableState& stableState, double 
     return stableState.stableRatio;
 }
 
-double HandAngleAlgorithm::applyCompensationRatio(
-    double ratioValue,
-    const CompensationState& compensationState,
-    double curveBlendRatio) const {
-    if (!compensationState.isActive) {
-        return clampValue(ratioValue, 0.0, 1.0);
-    }
-    const double rawRatioValue = clampValue(ratioValue, 0.0, 1.0);
-    const double enhancedRatioValue = std::pow(rawRatioValue, compensationState.gammaValue);
-    const double mixedRatioValue = rawRatioValue + (enhancedRatioValue - rawRatioValue) * curveBlendRatio;
-    return clampValue(mixedRatioValue, 0.0, 1.0);
-}
-
 double HandAngleAlgorithm::getFlexRatio(int channelIndex, double currentValue) {
     if (!hasClosedCalibration_ || !hasFistCalibration_) {
         return 0.0;
@@ -311,16 +257,60 @@ double HandAngleAlgorithm::getFlexRatio(int channelIndex, double currentValue) {
         closedCalibrationValueList_[toChannelArrayIndex(channelIndex)],
         fistCalibrationValueList_[toChannelArrayIndex(channelIndex)]);
 
-    if (kEnableFlexCompensation) {
-        ratioValue = applyCompensationRatio(
-            ratioValue,
-            flexCompensationStateByChannel_[toChannelArrayIndex(channelIndex)],
-            kFlexCurveBlendRatio);
-    }
     return stabilizeRatio(
         flexStableStateByChannel_[toChannelArrayIndex(channelIndex)],
         ratioValue,
         kFlexDeadbandRatio);
+}
+
+double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue) {
+    if (!hasClosedCalibration_ || !hasSpreadCalibration_) {
+        return 0.0;
+    }
+    double ratioValue = calculateChannelRatio(
+        currentValue,
+        closedCalibrationValueList_[toChannelArrayIndex(channelIndex)],
+        spreadCalibrationValueList_[toChannelArrayIndex(channelIndex)]);
+    return stabilizeRatio(
+        spreadStableStateByChannel_[toChannelArrayIndex(channelIndex)],
+        ratioValue,
+        kSpreadDeadbandRatio);
+}
+
+double HandAngleAlgorithm::getThumbGateRatio(double ch19Value) {
+    if (!hasClosedCalibration_ || !hasFistCalibration_) {
+        return 0.0;
+    }
+    // 第一层：AD 值 → 原始门控比例 [0, 1]
+    double rawRatio = calculateChannelRatio(
+        ch19Value,
+        closedCalibrationValueList_[toChannelArrayIndex(19)],
+        fistCalibrationValueList_[toChannelArrayIndex(19)]);
+
+    // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
+    thumbGateFilterDeque_.push_back(rawRatio);
+    if (thumbGateFilterDeque_.size() > kThumbGateFilterWindowSize) {
+        thumbGateFilterDeque_.pop_front();
+    }
+    double filteredRatio = 0.0;
+    for (double value : thumbGateFilterDeque_) {
+        filteredRatio += value;
+    }
+    filteredRatio /= static_cast<double>(thumbGateFilterDeque_.size());
+
+    // 第三层：死区稳定（对齐 Python stabilizeRatio）
+    filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, kThumbGateDeadbandRatio);
+
+    // 第四层：smoothstep 重新映射 [startRatio, endRatio] → [0, 1]
+    if (filteredRatio <= kThumbFlexGateStartRatio) {
+        return 0.0;
+    }
+    if (filteredRatio >= kThumbFlexGateEndRatio) {
+        return 1.0;
+    }
+    double t = (filteredRatio - kThumbFlexGateStartRatio)
+             / (kThumbFlexGateEndRatio - kThumbFlexGateStartRatio);
+    return t * t * (3.0 - 2.0 * t);
 }
 
 void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue) {
@@ -370,15 +360,32 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
 
     outputValue.thumb[0] = convertAngleToFloat(getFlexRatio(18, channelValueList[toChannelArrayIndex(18)]) * kThumbFlexAngleModel.mcpHoldDeltaAngle);
     outputValue.thumb[1] = convertAngleToFloat(getFlexRatio(17, channelValueList[toChannelArrayIndex(17)]) * kThumbFlexAngleModel.ipHoldDeltaAngle);
+
+    // 四指展开角：ratio × openRootAngle × angleScale
+    outputValue.index_finger[3] = convertAngleToFloat(
+        getSpreadRatio(12, channelValueList[toChannelArrayIndex(12)]) * 25.0 * 1.12);
+    outputValue.ring_finger[3] = convertAngleToFloat(
+        getSpreadRatio(8, channelValueList[toChannelArrayIndex(8)]) * 20.0 * 1.30);
+    outputValue.little_finger[3] = convertAngleToFloat(
+        getSpreadRatio(4, channelValueList[toChannelArrayIndex(4)]) * 25.0 * 1.40);
+
+    // 拇指展开（有符号，正=外展，负=内收）
+    double spreadRatio16 = getSpreadRatio(16, channelValueList[toChannelArrayIndex(16)]);
+    double gateRatio = getThumbGateRatio(channelValueList[toChannelArrayIndex(19)]);
+    double amplitudeRatio = getFlexRatio(16, channelValueList[toChannelArrayIndex(16)]);
+    double outwardRatio = spreadRatio16 * (1.0 - gateRatio);
+    double inwardRatio = amplitudeRatio * gateRatio;
+    outputValue.thumb[2] = convertAngleToFloat(
+        kThumbOpenPalmAngle * outwardRatio - kThumbInwardPalmAngle * inwardRatio);
 }
 
 bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue) {
     if (adValues == nullptr || !isReady()) {
-        clearOutputValueList(outputValue.little_finger, 3);
-        clearOutputValueList(outputValue.ring_finger, 3);
+        clearOutputValueList(outputValue.little_finger, 4);
+        clearOutputValueList(outputValue.ring_finger, 4);
         clearOutputValueList(outputValue.middle_finger, 3);
-        clearOutputValueList(outputValue.index_finger, 3);
-        clearOutputValueList(outputValue.thumb, 2);
+        clearOutputValueList(outputValue.index_finger, 4);
+        clearOutputValueList(outputValue.thumb, 3);
         return false;
     }
 

@@ -1,14 +1,14 @@
-﻿#include <windows.h>
+#include <windows.h>
 
 #include <conio.h>
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <iomanip>
 #include <iostream>
 #include <string>
 
 #include "hand_algorithm.h"
-#include "hand_skeleton_viewer.h"
 #include "serial_port_io.h"
 
 namespace {
@@ -16,7 +16,6 @@ namespace {
 using handdemo::CalibrationStage;
 using handdemo::HandAngleAlgorithm;
 using handdemo::HandAngleOutput;
-using handdemo::HandSkeletonViewer;
 using handdemo::SerialFrameReceiver;
 using handdemo::SerialPollResult;
 using handdemo::kChannelCount;
@@ -37,43 +36,39 @@ enum class KeyboardCommand {
 };
 
 const char* getCalibrationStageText(CalibrationStage stage) {
-    return stage == CalibrationStage::Closed ? "手指伸直" : "手握拳";
+    if (stage == CalibrationStage::Closed) {
+        return "手指伸直";
+    }
+    if (stage == CalibrationStage::Fist) {
+        return "手握拳";
+    }
+    return "手展开";
 }
 
 KeyboardCommand parseKeyValue(int keyValue) {
     if (keyValue < 0) {
         return KeyboardCommand::None;
     }
-
-    if (keyValue == 27) {
+    if (keyValue == 27 || std::tolower(keyValue) == 'q') {
         return KeyboardCommand::QuitProgram;
     }
-
     if (keyValue == ' ') {
         return KeyboardCommand::StartCalibration;
     }
-
-    const int lowerKeyValue = std::tolower(keyValue);
-    if (lowerKeyValue == 'c') {
+    if (std::tolower(keyValue) == 'c') {
         return KeyboardCommand::ResetCalibration;
     }
-    if (lowerKeyValue == 'q') {
-        return KeyboardCommand::QuitProgram;
-    }
-
     return KeyboardCommand::None;
 }
 
-KeyboardCommand pollConsoleKeyboardCommand() {
+KeyboardCommand pollKeyboardCommand() {
     if (!_kbhit()) {
         return KeyboardCommand::None;
     }
-
     int keyValue = _getch();
     if (keyValue == 0 || keyValue == 224) {
         keyValue = _getch();
     }
-
     return parseKeyValue(keyValue);
 }
 
@@ -86,52 +81,73 @@ bool tryGetNextCalibrationStage(int completedCalibrationStepCount, CalibrationSt
         stage = CalibrationStage::Fist;
         return true;
     }
+    if (completedCalibrationStepCount == 2) {
+        stage = CalibrationStage::Spread;
+        return true;
+    }
     return false;
 }
 
 int getCalibrationStepNumber(CalibrationStage stage) {
-    return stage == CalibrationStage::Closed ? 1 : 2;
+    if (stage == CalibrationStage::Closed) {
+        return 1;
+    }
+    if (stage == CalibrationStage::Fist) {
+        return 2;
+    }
+    return 3;
 }
 
-void beginSamplingStage(
-    HandAngleAlgorithm& algorithm,
-    SamplingRuntimeState& samplingRuntimeState,
-    CalibrationStage stage) {
+void beginSamplingStage(HandAngleAlgorithm& algorithm, SamplingRuntimeState& state, CalibrationStage stage) {
     algorithm.beginCalibration(stage);
-    samplingRuntimeState.isActive = true;
-    samplingRuntimeState.stage = stage;
-    samplingRuntimeState.startTimePoint = std::chrono::steady_clock::now();
-    samplingRuntimeState.collectedFrameCount = 0;
+    state.isActive = true;
+    state.stage = stage;
+    state.startTimePoint = std::chrono::steady_clock::now();
+    state.collectedFrameCount = 0;
 }
 
-void resetCalibrationState(
-    HandAngleAlgorithm& algorithm,
-    HandSkeletonViewer& handSkeletonViewer,
-    SamplingRuntimeState& samplingRuntimeState,
-    int& completedCalibrationStepCount) {
+void resetCalibration(HandAngleAlgorithm& algorithm, SamplingRuntimeState& state, int& stepCount) {
     algorithm.reset();
-    handSkeletonViewer.resetPose();
-    samplingRuntimeState = {};
-    completedCalibrationStepCount = 0;
+    state = {};
+    stepCount = 0;
 }
 
-void printStartupGuide(const SerialFrameReceiver& serialFrameReceiver) {
-    std::cout << "当前模式: 实时串口二进制协议输入。" << std::endl;
-    std::cout << "目标硬件: " << serialFrameReceiver.getTargetHardwareIdText() << std::endl;
-    std::cout << "按键说明:" << std::endl;
-    std::cout << "  Space: 开始当前阶段 2 秒校准" << std::endl;
-    std::cout << "  C: 清空校准并重新开始" << std::endl;
-    std::cout << "  Q 或 Esc: 退出程序" << std::endl;
-    std::cout << "校准顺序: step1=手指伸直 -> step2=手握拳" << std::endl;
-    std::cout << "请先按空格开始 step1。" << std::endl;
+void printStartupGuide(const SerialFrameReceiver& receiver) {
+    std::cout << "目标硬件: " << receiver.getTargetHardwareIdText() << std::endl;
+    std::cout << "按键: Space=开始校准  C=重置  Q=退出" << std::endl;
+    std::cout << "校准顺序: step1=手指伸直 -> step2=手握拳 -> step3=手展开" << std::endl;
+    std::cout << "请按空格开始 step1。" << std::endl;
 }
 
-void printCalibrationStageFinished(CalibrationStage stage, std::size_t collectedFrameCount) {
-    std::cout
-        << "step" << getCalibrationStepNumber(stage)
-        << " 完成，姿态=" << getCalibrationStageText(stage)
-        << "，采样帧数=" << collectedFrameCount
-        << std::endl;
+void printCalibrationFinished(CalibrationStage stage, std::size_t frameCount) {
+    std::cout << "step" << getCalibrationStepNumber(stage)
+              << " 完成 姿态=" << getCalibrationStageText(stage)
+              << " 帧数=" << frameCount << std::endl;
+}
+
+void printFingerAngles(const char* fingerName, const float angles[4], int flexCount, int spreadIndex) {
+    std::cout << std::fixed << std::setprecision(1);
+    if (flexCount == 3) {
+        std::cout << fingerName << " 弯曲: MCP=" << angles[0] << " PIP=" << angles[1] << " DIP=" << angles[2];
+    } else {
+        std::cout << fingerName << " 弯曲: MCP=" << angles[0] << " IP=" << angles[1];
+    }
+    if (spreadIndex >= 0 && spreadIndex < 4) {
+        std::cout << "  展开: " << angles[spreadIndex];
+    }
+    std::cout << std::endl;
+}
+
+void printOutputValue(const HandAngleOutput& outputValue) {
+    std::cout << "----------" << std::endl;
+    printFingerAngles("食指  ", outputValue.index_finger, 3, 3);
+    printFingerAngles("中指  ", outputValue.middle_finger, 3, -1);
+    printFingerAngles("无名指", outputValue.ring_finger, 3, 3);
+    printFingerAngles("小指  ", outputValue.little_finger, 3, 3);
+    std::cout << std::fixed << std::setprecision(1);
+    std::cout << "拇指  " << "弯曲: MCP=" << outputValue.thumb[0] << " IP=" << outputValue.thumb[1]
+              << "  展开: " << std::showpos << outputValue.thumb[2] << std::noshowpos
+              << (outputValue.thumb[2] >= 0 ? "(外展)" : "(内收)") << std::endl;
 }
 
 }  // namespace
@@ -141,7 +157,6 @@ int main() {
     SetConsoleCP(CP_UTF8);
 
     HandAngleAlgorithm algorithm;
-    HandSkeletonViewer handSkeletonViewer;
     HandAngleOutput outputValue{};
     SerialFrameReceiver serialFrameReceiver;
     std::array<int16_t, kChannelCount> latestFrameValueList{};
@@ -152,23 +167,15 @@ int main() {
     printStartupGuide(serialFrameReceiver);
 
     while (true) {
-        const int keyValue = handSkeletonViewer.showWindowFrame();
-        KeyboardCommand keyboardCommand = parseKeyValue(keyValue);
-        if (keyboardCommand == KeyboardCommand::None) {
-            keyboardCommand = pollConsoleKeyboardCommand();
-        }
+        KeyboardCommand keyboardCommand = pollKeyboardCommand();
 
         if (keyboardCommand == KeyboardCommand::QuitProgram) {
             break;
         }
 
         if (keyboardCommand == KeyboardCommand::ResetCalibration) {
-            resetCalibrationState(
-                algorithm,
-                handSkeletonViewer,
-                samplingRuntimeState,
-                completedCalibrationStepCount);
-            std::cout << "已清空校准状态，请按空格重新开始 step1。" << std::endl;
+            resetCalibration(algorithm, samplingRuntimeState, completedCalibrationStepCount);
+            std::cout << "已重置校准，请按空格重新开始 step1。" << std::endl;
         } else if (keyboardCommand == KeyboardCommand::StartCalibration) {
             if (samplingRuntimeState.isActive) {
                 std::cout << "当前阶段正在采样中，请等待 2 秒采样结束。" << std::endl;
@@ -176,13 +183,11 @@ int main() {
                 CalibrationStage nextStage = CalibrationStage::Closed;
                 if (tryGetNextCalibrationStage(completedCalibrationStepCount, nextStage)) {
                     beginSamplingStage(algorithm, samplingRuntimeState, nextStage);
-                    std::cout
-                        << "开始 step" << getCalibrationStepNumber(nextStage)
-                        << " 校准，姿态=" << getCalibrationStageText(nextStage)
-                        << "，持续 " << kSamplingDurationMs << "ms。"
-                        << std::endl;
+                    std::cout << "开始 step" << getCalibrationStepNumber(nextStage)
+                              << " 校准 姿态=" << getCalibrationStageText(nextStage)
+                              << " 持续 " << kSamplingDurationMs << "ms" << std::endl;
                 } else {
-                    std::cout << "两步校准已经完成，程序正在实时输出角度。" << std::endl;
+                    std::cout << "三步校准已完成，正在实时输出角度。" << std::endl;
                 }
             }
         }
@@ -207,21 +212,20 @@ int main() {
                 samplingRuntimeState.isActive = false;
 
                 if (!algorithm.finishCalibration()) {
-                    std::cout
-                        << "step" << getCalibrationStepNumber(finishedStage)
-                        << " 校准失败，2 秒内有效帧不足。当前采样帧数="
-                        << collectedFrameCount
-                        << "。请检查串口后按 C 重试。"
-                        << std::endl;
+                    std::cout << "step" << getCalibrationStepNumber(finishedStage)
+                              << " 校准失败 2 秒内有效帧不足 帧数=" << collectedFrameCount
+                              << " 请按 C 重试" << std::endl;
                     continue;
                 }
 
                 ++completedCalibrationStepCount;
-                printCalibrationStageFinished(finishedStage, collectedFrameCount);
+                printCalibrationFinished(finishedStage, collectedFrameCount);
                 if (finishedStage == CalibrationStage::Closed) {
-                    std::cout << "请保持手握拳，然后再按一次空格开始 step2。" << std::endl;
+                    std::cout << "请保持手握拳，按空格开始 step2。" << std::endl;
+                } else if (finishedStage == CalibrationStage::Fist) {
+                    std::cout << "请保持手展开，按空格开始 step3。" << std::endl;
                 } else {
-                    std::cout << "两步校准完成，开始实时处理串口 AD 数据。" << std::endl;
+                    std::cout << "三步校准完成，开始实时输出角度。" << std::endl;
                 }
             }
         }
@@ -231,11 +235,10 @@ int main() {
         }
 
         if (algorithm.processFrame(latestFrameValueList.data(), outputValue)) {
-            handSkeletonViewer.updateFromAngles(outputValue);
+            printOutputValue(outputValue);
         }
     }
 
-    handSkeletonViewer.closeWindow();
     std::cout << "程序已退出。" << std::endl;
     return 0;
 }

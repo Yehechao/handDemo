@@ -11,29 +11,27 @@ namespace handdemo {
 enum class CalibrationStage : int32_t {
     Closed = 0,
     Fist = 1,
+    Spread = 2,
 };
 
 struct HandAngleOutput {
-    float little_finger[3];
-    float ring_finger[3];
-    float middle_finger[3];
-    float index_finger[3];
-    float thumb[2];
+    float little_finger[4];  // [MCP, PIP, DIP, pinky-ring_spread]
+    float ring_finger[4];    // [MCP, PIP, DIP, ring-middle_spread]
+    float middle_finger[3];  // [MCP, PIP, DIP]
+    float index_finger[4];   // [MCP, PIP, DIP, index-middle_spread]
+    float thumb[3];          // [MCP, IP, thumb-index_spread]  正=外展, 负=内收
 };
 
 class HandAngleAlgorithm {
 public:
     HandAngleAlgorithm();
 
-    // reset: 清空全部校准状态、滤波状态和补偿状态
+    // reset: 清空全部校准状态和滤波状态
     void reset();
-    // beginCalibration: 开始某一个校准阶段，后续持续喂入 2 秒 AD 帧
     void beginCalibration(CalibrationStage stage);
-    // pushCalibrationFrame: 采样期间向算法层送入一帧 AD 数据
     bool pushCalibrationFrame(const int16_t adValues[kChannelCount]);
-    // finishCalibration: 结束当前校准阶段，按平均值写入该阶段参考基准
     bool finishCalibration();
-    // isReady: 两步校准都完成后返回 true
+    // isReady: 三步校准（Closed/Fist/Spread）都完成后返回 true
     bool isReady() const;
     // processFrame: 传入一帧 AD 数据并输出弯曲角结构体，未完成校准时返回 false
     bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
@@ -44,12 +42,6 @@ private:
         CalibrationStage stage = CalibrationStage::Closed;
         std::array<double, kChannelCount> sumValueList{};
         std::size_t frameCount = 0;
-    };
-
-    struct CompensationState {
-        bool isActive = false;
-        double boostFactorValue = 1.0;
-        double gammaValue = 1.0;
     };
 
     struct RatioStableState {
@@ -65,12 +57,10 @@ private:
 
     void resetFilterState();
     void resetSamplingState();
-    void resetCompensationState();
 
     std::array<double, kChannelCount> buildAverageCalibrationFrame() const;
     std::array<double, kChannelCount> buildStageCalibrationTemplate(CalibrationStage stage) const;
     void applyStageCalibrationValue(CalibrationStage stage, const std::array<double, kChannelCount>& averageValueList);
-    void rebuildChannelCompensation();
 
     std::array<double, kChannelCount> filterFrameValueList(const int16_t adValues[kChannelCount]);
     std::array<double, kChannelCount> getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]);
@@ -79,17 +69,22 @@ private:
     void buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue);
 
     double stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio);
-    double applyCompensationRatio(double ratioValue, const CompensationState& compensationState, double curveBlendRatio) const;
+    double getSpreadRatio(int channelIndex, double currentValue);
+    double getThumbGateRatio(double ch19Value);
 
     std::array<double, kChannelCount> closedCalibrationValueList_{};
     std::array<double, kChannelCount> fistCalibrationValueList_{};
+    std::array<double, kChannelCount> spreadCalibrationValueList_{};
     bool hasClosedCalibration_ = false;
     bool hasFistCalibration_ = false;
+    bool hasSpreadCalibration_ = false;
 
     SamplingState samplingState_{};
     RawFilterState rawFilterState_{};
     std::array<RatioStableState, kChannelCount> flexStableStateByChannel_{};
-    std::array<CompensationState, kChannelCount> flexCompensationStateByChannel_{};
+    std::array<RatioStableState, kChannelCount> spreadStableStateByChannel_{};
+    RatioStableState thumbGateStableState_{};
+    std::deque<double> thumbGateFilterDeque_{};
 };
 
 }  

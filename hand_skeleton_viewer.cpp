@@ -81,6 +81,23 @@ const std::array<cv::Point2f, SkeletonTemplate20::pointCount> fistPosePointList 
     cv::Point2f(415.0f, 316.0f),
 }};
 
+// foldSpreadSuppressStartRatio/foldSpreadSuppressEndRatio:
+// 弯曲比例达到 startRatio 时开始抑制展开，达到 endRatio 时展开完全收束。
+constexpr double foldSpreadSuppressStartRatio = 0.25;
+constexpr double foldSpreadSuppressEndRatio = 0.75;
+
+// rotatePointAroundCenter: 将点绕中心旋转指定角度，用于展开动画。
+cv::Point2f rotatePointAroundCenter(const cv::Point2f& pointValue, const cv::Point2f& centerPoint, double angleDegreeValue) {
+    const double radianValue = angleDegreeValue * 3.14159265358979323846 / 180.0;
+    const double cosValue = std::cos(radianValue);
+    const double sinValue = std::sin(radianValue);
+    const double deltaX = static_cast<double>(pointValue.x - centerPoint.x);
+    const double deltaY = static_cast<double>(pointValue.y - centerPoint.y);
+    return cv::Point2f(
+        static_cast<float>(centerPoint.x + deltaX * cosValue - deltaY * sinValue),
+        static_cast<float>(centerPoint.y + deltaX * sinValue + deltaY * cosValue));
+}
+
 // 颜色
 const cv::Scalar backgroundColorValue(255, 255, 255);
 const cv::Scalar boneColorValue(219, 12, 8);
@@ -325,8 +342,79 @@ void HandSkeletonViewer::updateFromAngles(const HandAngleOutput& outputValue) {
         19,
         pointDepthValueList);
 
+    // ===== 展开旋转：以中指为锚，四指扇形展开，握拳时收束 =====
+    const double indexFlexRatio = std::max({
+        getAngleRatio(static_cast<double>(outputValue.index_finger[0]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Index)].rootHoldDeltaAngle),
+        getAngleRatio(static_cast<double>(outputValue.index_finger[1]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Index)].jointHoldDeltaAngle1),
+        getAngleRatio(static_cast<double>(outputValue.index_finger[2]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Index)].jointHoldDeltaAngle2),
+    });
+    const double middleFlexRatio = std::max({
+        getAngleRatio(static_cast<double>(outputValue.middle_finger[0]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Middle)].rootHoldDeltaAngle),
+        getAngleRatio(static_cast<double>(outputValue.middle_finger[1]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Middle)].jointHoldDeltaAngle1),
+        getAngleRatio(static_cast<double>(outputValue.middle_finger[2]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Middle)].jointHoldDeltaAngle2),
+    });
+    const double ringFlexRatio = std::max({
+        getAngleRatio(static_cast<double>(outputValue.ring_finger[0]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Ring)].rootHoldDeltaAngle),
+        getAngleRatio(static_cast<double>(outputValue.ring_finger[1]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Ring)].jointHoldDeltaAngle1),
+        getAngleRatio(static_cast<double>(outputValue.ring_finger[2]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Ring)].jointHoldDeltaAngle2),
+    });
+    const double littleFlexRatio = std::max({
+        getAngleRatio(static_cast<double>(outputValue.little_finger[0]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Little)].rootHoldDeltaAngle),
+        getAngleRatio(static_cast<double>(outputValue.little_finger[1]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Little)].jointHoldDeltaAngle1),
+        getAngleRatio(static_cast<double>(outputValue.little_finger[2]), kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Little)].jointHoldDeltaAngle2),
+    });
+    const double thumbFlexRatio = std::max(
+        getAngleRatio(static_cast<double>(outputValue.thumb[0]), kThumbFlexAngleModel.mcpHoldDeltaAngle),
+        getAngleRatio(static_cast<double>(outputValue.thumb[1]), kThumbFlexAngleModel.ipHoldDeltaAngle));
+
+    auto getFoldSuppressRatio = [](double flexRatioValue) -> double {
+        if (flexRatioValue <= foldSpreadSuppressStartRatio) {
+            return 0.0;
+        }
+        if (flexRatioValue >= foldSpreadSuppressEndRatio) {
+            return 1.0;
+        }
+        const double t = (flexRatioValue - foldSpreadSuppressStartRatio)
+                       / (foldSpreadSuppressEndRatio - foldSpreadSuppressStartRatio);
+        return t * t * (3.0 - 2.0 * t);
+    };
+
+    auto getVisualSpread = [&getFoldSuppressRatio](double spreadAngle, double flexRatio) {
+        return spreadAngle * (1.0 - getFoldSuppressRatio(flexRatio));
+    };
+
+    const cv::Point2f& middleBasePoint = currentSkeleton_.pointList[8];
+
+    // 食指链 [4,5,6,7]：正向旋转（远离中指）
+    const double indexVisualSpread = getVisualSpread(outputValue.index_finger[3], indexFlexRatio);
+    for (std::size_t pointIndex : {4U, 5U, 6U, 7U}) {
+        currentSkeleton_.pointList[pointIndex] = rotatePointAroundCenter(
+            currentSkeleton_.pointList[pointIndex], middleBasePoint, indexVisualSpread);
+    }
+
+    // 无名指链 [12,13,14,15]：负向旋转
+    const double ringVisualSpread = getVisualSpread(outputValue.ring_finger[3], ringFlexRatio);
+    for (std::size_t pointIndex : {12U, 13U, 14U, 15U}) {
+        currentSkeleton_.pointList[pointIndex] = rotatePointAroundCenter(
+            currentSkeleton_.pointList[pointIndex], middleBasePoint, -ringVisualSpread);
+    }
+
+    // 小指链 [16,17,18,19]：负向旋转，累加无名指展开
+    const double littleVisualSpread = getVisualSpread(outputValue.little_finger[3], littleFlexRatio);
+    for (std::size_t pointIndex : {16U, 17U, 18U, 19U}) {
+        currentSkeleton_.pointList[pointIndex] = rotatePointAroundCenter(
+            currentSkeleton_.pointList[pointIndex], middleBasePoint, -(ringVisualSpread + littleVisualSpread));
+    }
+
+    // 拇指链 [1,2,3]：围绕 point 0 旋转，正=外展，负=内收
+    const double thumbVisualSpread = getVisualSpread(static_cast<double>(outputValue.thumb[2]), thumbFlexRatio);
+    for (std::size_t pointIndex : {1U, 2U, 3U}) {
+        currentSkeleton_.pointList[pointIndex] = rotatePointAroundCenter(
+            currentSkeleton_.pointList[pointIndex], currentSkeleton_.pointList[0], thumbVisualSpread);
+    }
+
     // applyPseudoDepthProjection: 所有点都重建完成后，再统一做一次轻量投影。
-    // 这样立体感来自“最终显示变换”，而不是把每段骨长直接缩短。
+    // 这样立体感来自”最终显示变换”，而不是把每段骨长直接缩短。
     applyPseudoDepthProjection(pointDepthValueList);
 }
 

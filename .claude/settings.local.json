@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(cmake -S \"D:/yhc_code/handDemo_c/handDemo\" -B \"D:/yhc_code/handDemo_c/handDemo/build\" -G \"Visual Studio 17 2022\" -A x64)",
+      "Bash(cmake --build \"D:/yhc_code/handDemo_c/handDemo/build\" --config Release)"
+    ]
+  }
+}

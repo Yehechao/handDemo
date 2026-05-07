@@ -369,3 +369,4 @@ build/
 *.sln
 *.vcxproj
 *.filters
+CLAUDE.md

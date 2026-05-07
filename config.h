@@ -9,7 +9,7 @@ namespace handdemo {
 // ==================== 1. 基础协议参数 ====================
 
 // kChannelCount: 手套每帧固定输入的 AD 通道数。
-constexpr std::size_t kChannelCount = 18;
+constexpr std::size_t kChannelCount = 19;
 
 // kAdMinValue/kAdMaxValue: 单路 AD 的合法输入范围。
 constexpr int16_t kAdMinValue = 0;
@@ -27,40 +27,60 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 // ==================== 3. 均值滤波参数 ====================
 
 // kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数。
-// 当前按“前 14 帧 + 当前帧 = 15 帧总窗口”处理。
-constexpr std::size_t kMeanFilterHistoryFrameCount = 14;
+// 对齐 Python：前 9 帧 + 当前帧 = 10 帧总窗口。
+constexpr std::size_t kMeanFilterHistoryFrameCount = 7;
 
 // kMeanFilterWindowFrameCount: 均值滤波总窗口大小。
 constexpr std::size_t kMeanFilterWindowFrameCount =
     kMeanFilterHistoryFrameCount + 1;
+
+// kThumbGateFilterWindowSize: CH19 门控比例独立滤波窗口大小，对齐 Python movingAverageThumbGateWindowSize。
+constexpr std::size_t kThumbGateFilterWindowSize = 7;
 
 // ==================== 4. ratio 稳定层参数 ====================
 
 // kFlexDeadbandRatio: 弯曲 ratio 的死区。
 constexpr double kFlexDeadbandRatio = 0.03;
 
-// ==================== 5. 弯曲补偿参数 ====================
+// ==================== 5. 展开（Spread）参数 ====================
 
-// kEnableFlexCompensation: 是否启用弯曲弱通道补偿。
-// 当前版本默认关闭，避免把弱通道的小幅噪声放大。
-constexpr bool kEnableFlexCompensation = false;
+// kSpreadChannelIndexList: 展开通道编号列表（CH4/8/12/16）。
+constexpr std::array<int, 4> kSpreadChannelIndexList = {4, 8, 12, 16};
 
-// kFlexWeakThresholdRatio: 弯曲通道被判定为偏弱的阈值比例。
-constexpr double kFlexWeakThresholdRatio = 0.85;
+// SpreadPairConfig: 单组指缝对的展开映射定义。
+struct SpreadPairConfig {
+    // channelIndex: 传感器通道号。
+    int channelIndex;
+    // openRootAngle: 外层手指最大展开角，单位度。
+    double openRootAngle;
+    // angleScale: 显示缩放系数。
+    double angleScale;
+};
 
-// kFlexMinSpanRatio: 弯曲补偿时的最小参考跨度比例。
-constexpr double kFlexMinSpanRatio = 0.35;
+// kSpreadPairConfigList: 三组四指指缝展开配置，顺序为 ringPinky、middleRing、indexMiddle。
+constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
+    {4,  25.0, 1.40},  // ringPinky:   外指=小指
+    {8,  20.0, 1.30},  // middleRing:  外指=无名指
+    {12, 25.0, 1.12},  // indexMiddle: 外指=食指
+}};
 
-// kFlexMaxBoostFactor: 弯曲补偿允许的最大增强倍数。
-constexpr double kFlexMaxBoostFactor = 1.60;
+// kThumbOpenPalmAngle/kThumbInwardPalmAngle: 拇指外展/内收最大角度，单位度。
+constexpr double kThumbOpenPalmAngle = 45.0;
+constexpr double kThumbInwardPalmAngle = 45.0;
 
-// kFlexCurveBlendRatio: 弯曲补偿结果和原始 ratio 的混合比例。
-constexpr double kFlexCurveBlendRatio = 1.00;
+// kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: CH19 门控 smoothstep 映射区间。
+constexpr double kThumbFlexGateStartRatio = 0.18;
+constexpr double kThumbFlexGateEndRatio = 0.45;
+
+// kThumbGateDeadbandRatio: CH19 门控死区。
+constexpr double kThumbGateDeadbandRatio = 0.03;
+
+// kSpreadDeadbandRatio: 展开 ratio 死区。
+constexpr double kSpreadDeadbandRatio = 0.03;
 
 // ==================== 6. 通道映射参数 ====================
 
-// kFlexChannelIndexList: 所有参与弯曲校准、滤波输出和弯曲补偿的通道编号集合。
-// CH4/CH8/CH12/CH16 只保留接收，不进入算法处理。
+// kFlexChannelIndexList: 所有参与弯曲校准和滤波输出的通道编号集合。
 constexpr std::array<int, 14> kFlexChannelIndexList = {
     18, 17,
     15, 14, 13,
@@ -112,11 +132,13 @@ struct FingerFlexAngleModel {
 };
 
 // kFingerFlexAngleModelByIndex: 四指弯曲角上限，顺序为食指、中指、无名指、小指。
+// 对齐 Python kinematics.fingerModelByFingerName:
+// index/middle/ring/pinky: holdRootAngle=85, holdJointAngleList=[100, 75]
 constexpr std::array<FingerFlexAngleModel, 4> kFingerFlexAngleModelByIndex = {{
-    {90.0, 100.0, 85.0},
-    {90.0, 100.0, 85.0},
-    {85.0, 100.0, 85.0},
-    {85.0, 95.0, 85.0},
+    {85.0, 100.0, 75.0},  // 食指
+    {85.0, 100.0, 75.0},  // 中指
+    {85.0, 100.0, 75.0},  // 无名指
+    {85.0, 100.0, 75.0},  // 小指
 }};
 
 // ThumbFlexAngleModel: 拇指两级弯曲角上限定义，单位为度。
@@ -128,10 +150,10 @@ struct ThumbFlexAngleModel {
     double ipHoldDeltaAngle;
 };
 
-// kThumbFlexAngleModel: 拇指弯曲角上限。
+// holdSegment34Angle=70 (CH18), holdSegment23Angle=60 (CH17)
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
-    70.0,
-    80.0,
+    85.0,
+    85.0,
 };
 
 }  // namespace handdemo

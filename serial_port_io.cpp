@@ -48,7 +48,7 @@ constexpr std::size_t pressureSensorByteCount = 23U * 20U;
 // freedomAngleValueCount: 自由度角度总数，最后 1 路仍保留占位
 constexpr std::size_t freedomAngleValueCount = 19U;
 // rotationAngleValueCount: 姿态角总数，当前版本先跳过不用
-constexpr std::size_t rotationAngleValueCount = 3U;
+constexpr std::size_t rotationAngleValueCount = 4U;
 // frameMetaByteCount: 帧头、帧类型、帧长度、数据类型一共 6 字节
 constexpr std::size_t frameMetaByteCount = 2U + 1U + 2U + 1U;
 // freedomAngleOffset/checksumOffset/frameByteCount: 二进制协议固定布局
