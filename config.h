@@ -130,7 +130,7 @@ struct ThumbFlexAngleModel {
 
 // kThumbFlexAngleModel: 拇指弯曲角上限。
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
-    60.0,
+    70.0,
     80.0,
 };
 
