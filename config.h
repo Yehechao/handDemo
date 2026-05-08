@@ -27,8 +27,7 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 // ==================== 3. 均值滤波参数 ====================
 
 // kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数。
-// 对齐 Python：前 9 帧 + 当前帧 = 10 帧总窗口。
-constexpr std::size_t kMeanFilterHistoryFrameCount = 7;
+constexpr std::size_t kMeanFilterHistoryFrameCount = 10;
 
 // kMeanFilterWindowFrameCount: 均值滤波总窗口大小。
 constexpr std::size_t kMeanFilterWindowFrameCount =
