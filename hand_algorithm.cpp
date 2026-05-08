@@ -162,7 +162,6 @@ void HandAngleAlgorithm::applyStageCalibrationValue(
             targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
         }
         targetValueList[toChannelArrayIndex(16)] = averageValueList[toChannelArrayIndex(16)];
-        targetValueList[toChannelArrayIndex(19)] = averageValueList[toChannelArrayIndex(19)];
         fistCalibrationValueList_ = targetValueList;
         hasFistCalibration_ = true;
         return;
@@ -277,15 +276,16 @@ double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue)
         kSpreadDeadbandRatio);
 }
 
-double HandAngleAlgorithm::getThumbGateRatio(double ch19Value) {
+double HandAngleAlgorithm::getThumbGateRatio(double ch18Value) {
     if (!hasClosedCalibration_ || !hasFistCalibration_) {
         return 0.0;
     }
     // 第一层：AD 值 → 原始门控比例 [0, 1]
+    // CH18 同时用于拇指 MCP 弯曲和拇指内收门控；CH19 只保留为原始监视通道。
     double rawRatio = calculateChannelRatio(
-        ch19Value,
-        closedCalibrationValueList_[toChannelArrayIndex(19)],
-        fistCalibrationValueList_[toChannelArrayIndex(19)]);
+        ch18Value,
+        closedCalibrationValueList_[toChannelArrayIndex(18)],
+        fistCalibrationValueList_[toChannelArrayIndex(18)]);
 
     // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
     thumbGateFilterDeque_.push_back(rawRatio);
@@ -371,7 +371,7 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
 
     // 拇指展开（有符号，正=外展，负=内收）
     double spreadRatio16 = getSpreadRatio(16, channelValueList[toChannelArrayIndex(16)]);
-    double gateRatio = getThumbGateRatio(channelValueList[toChannelArrayIndex(19)]);
+    double gateRatio = getThumbGateRatio(channelValueList[toChannelArrayIndex(18)]);
     double amplitudeRatio = getFlexRatio(16, channelValueList[toChannelArrayIndex(16)]);
     double outwardRatio = spreadRatio16 * (1.0 - gateRatio);
     double inwardRatio = amplitudeRatio * gateRatio;

@@ -33,7 +33,7 @@ constexpr std::size_t kMeanFilterHistoryFrameCount = 10;
 constexpr std::size_t kMeanFilterWindowFrameCount =
     kMeanFilterHistoryFrameCount + 1;
 
-// kThumbGateFilterWindowSize: CH19 门控比例独立滤波窗口大小，对齐 Python movingAverageThumbGateWindowSize。
+// kThumbGateFilterWindowSize: CH18 门控比例独立滤波窗口大小，对齐 Python movingAverageThumbGateWindowSize。
 constexpr std::size_t kThumbGateFilterWindowSize = 7;
 
 // ==================== 4. ratio 稳定层参数 ====================
@@ -67,11 +67,11 @@ constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
 constexpr double kThumbOpenPalmAngle = 45.0;
 constexpr double kThumbInwardPalmAngle = 45.0;
 
-// kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: CH19 门控 smoothstep 映射区间。
+// kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: CH18 内收门控 smoothstep 映射区间。
 constexpr double kThumbFlexGateStartRatio = 0.18;
 constexpr double kThumbFlexGateEndRatio = 0.45;
 
-// kThumbGateDeadbandRatio: CH19 门控死区。
+// kThumbGateDeadbandRatio: CH18 内收门控死区。
 constexpr double kThumbGateDeadbandRatio = 0.0;
 
 // kSpreadDeadbandRatio: 展开 ratio 死区。

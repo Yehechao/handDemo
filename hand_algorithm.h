@@ -70,7 +70,7 @@ private:
 
     double stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio);
     double getSpreadRatio(int channelIndex, double currentValue);
-    double getThumbGateRatio(double ch19Value);
+    double getThumbGateRatio(double ch18Value);
 
     std::array<double, kChannelCount> closedCalibrationValueList_{};
     std::array<double, kChannelCount> fistCalibrationValueList_{};
