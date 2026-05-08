@@ -40,7 +40,7 @@ constexpr std::size_t kThumbGateFilterWindowSize = 7;
 // ==================== 4. ratio 稳定层参数 ====================
 
 // kFlexDeadbandRatio: 弯曲 ratio 的死区。
-constexpr double kFlexDeadbandRatio = 0.03;
+constexpr double kFlexDeadbandRatio = 0.0;
 
 // ==================== 5. 展开（Spread）参数 ====================
 
@@ -73,10 +73,10 @@ constexpr double kThumbFlexGateStartRatio = 0.18;
 constexpr double kThumbFlexGateEndRatio = 0.45;
 
 // kThumbGateDeadbandRatio: CH19 门控死区。
-constexpr double kThumbGateDeadbandRatio = 0.03;
+constexpr double kThumbGateDeadbandRatio = 0.0;
 
 // kSpreadDeadbandRatio: 展开 ratio 死区。
-constexpr double kSpreadDeadbandRatio = 0.03;
+constexpr double kSpreadDeadbandRatio = 0.0;
 
 // ==================== 6. 通道映射参数 ====================
 
