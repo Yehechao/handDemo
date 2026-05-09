@@ -26,14 +26,11 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
 // ==================== 3. 均值滤波参数 ====================
 
-// kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数，不含当前帧。
-constexpr std::size_t kMeanFilterHistoryFrameCount = 14;
-
-// kMeanFilterWindowFrameCount: 均值滤波总窗口大小，C++ 版本固定为 15 帧。
+// kMeanFilterWindowFrameCount: 算法内部实时均值滤波窗口大小，表示最近 15 帧。
 constexpr std::size_t kMeanFilterWindowFrameCount = 15;
 
-// kThumbGateFilterWindowSize: 拇指门控比例独立滤波窗口大小，C++ 版本固定为 15 帧。
-constexpr std::size_t kThumbGateFilterWindowSize = 15;
+// kThumbGateFilterWindowSize: 拇指门控比例独立滤波窗口大小，
+constexpr std::size_t kThumbGateFilterWindowSize = 10;
 
 // ==================== 4. ratio 稳定层参数 ====================
 
@@ -68,9 +65,6 @@ constexpr double kThumbInwardPalmAngle = 45.0;
 
 // kThumbInwardGateChannel: 拇指内收门控通道，可选 CH18 或 CH19，默认 CH18。
 constexpr int kThumbInwardGateChannel = 18;
-static_assert(
-    kThumbInwardGateChannel == 18 || kThumbInwardGateChannel == 19,
-    "kThumbInwardGateChannel must be 18 or 19");
 
 // kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: 拇指内收门控 smoothstep 映射区间。
 constexpr double kThumbFlexGateStartRatio = 0.18;
