@@ -26,15 +26,14 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
 // ==================== 3. 均值滤波参数 ====================
 
-// kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数。
-constexpr std::size_t kMeanFilterHistoryFrameCount = 10;
+// kMeanFilterHistoryFrameCount: 算法内部实时均值滤波收集的历史帧数，不含当前帧。
+constexpr std::size_t kMeanFilterHistoryFrameCount = 14;
 
-// kMeanFilterWindowFrameCount: 均值滤波总窗口大小。
-constexpr std::size_t kMeanFilterWindowFrameCount =
-    kMeanFilterHistoryFrameCount + 1;
+// kMeanFilterWindowFrameCount: 均值滤波总窗口大小，C++ 版本固定为 15 帧。
+constexpr std::size_t kMeanFilterWindowFrameCount = 15;
 
-// kThumbGateFilterWindowSize: CH18 门控比例独立滤波窗口大小，对齐 Python movingAverageThumbGateWindowSize。
-constexpr std::size_t kThumbGateFilterWindowSize = 7;
+// kThumbGateFilterWindowSize: 拇指门控比例独立滤波窗口大小，C++ 版本固定为 15 帧。
+constexpr std::size_t kThumbGateFilterWindowSize = 15;
 
 // ==================== 4. ratio 稳定层参数 ====================
 
@@ -67,15 +66,25 @@ constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
 constexpr double kThumbOpenPalmAngle = 45.0;
 constexpr double kThumbInwardPalmAngle = 45.0;
 
-// kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: CH18 内收门控 smoothstep 映射区间。
+// kThumbInwardGateChannel: 拇指内收门控通道，可选 CH18 或 CH19，默认 CH18。
+constexpr int kThumbInwardGateChannel = 18;
+static_assert(
+    kThumbInwardGateChannel == 18 || kThumbInwardGateChannel == 19,
+    "kThumbInwardGateChannel must be 18 or 19");
+
+// kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: 拇指内收门控 smoothstep 映射区间。
 constexpr double kThumbFlexGateStartRatio = 0.18;
 constexpr double kThumbFlexGateEndRatio = 0.45;
 
-// kThumbGateDeadbandRatio: CH18 内收门控死区。
+// kThumbGateDeadbandRatio: 拇指内收门控死区。
 constexpr double kThumbGateDeadbandRatio = 0.0;
 
 // kSpreadDeadbandRatio: 展开 ratio 死区。
 constexpr double kSpreadDeadbandRatio = 0.0;
+
+// kFoldSpreadSuppress*: 根节弯曲触发展开角算法收束，中节/末节不触发。
+constexpr double kFoldSpreadSuppressStartRatio = 0.25;
+constexpr double kFoldSpreadSuppressEndRatio = 0.75;
 
 // ==================== 6. 通道映射参数 ====================
 
@@ -132,7 +141,7 @@ struct FingerFlexAngleModel {
 
 // kFingerFlexAngleModelByIndex: 四指弯曲角上限，顺序为食指、中指、无名指、小指。
 // 对齐 Python kinematics.fingerModelByFingerName:
-// index/middle/ring/pinky: holdRootAngle=85, holdJointAngleList=[100, 75]
+// index/middle/ring/pinky: holdRootAngle=90, holdJointAngleList=[90, 90]
 constexpr std::array<FingerFlexAngleModel, 4> kFingerFlexAngleModelByIndex = {{
     {90.0, 90.0, 90.0},  // 食指
     {90.0, 90.0, 90.0},  // 中指
@@ -149,10 +158,10 @@ struct ThumbFlexAngleModel {
     double ipHoldDeltaAngle;
 };
 
-// holdSegment34Angle=70 (CH18), holdSegment23Angle=60 (CH17)
+// holdSegment23Angle=85 (CH17), holdSegment34Angle=85 (CH18)
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
-    90.0,
-    90.0,
+    85.0,
+    85.0,
 };
 
 }  // namespace handdemo

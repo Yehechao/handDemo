@@ -44,6 +44,35 @@ float convertAngleToFloat(double degreeValue) {
     return static_cast<float>(clampValue(roundedValue, minValue, maxValue));
 }
 
+bool isFlexChannelIndex(int channelIndex) {
+    for (int flexChannelIndex : kFlexChannelIndexList) {
+        if (flexChannelIndex == channelIndex) {
+            return true;
+        }
+    }
+    return false;
+}
+
+double getSmoothstepRatio(double startRatio, double endRatio, double value) {
+    if (value <= startRatio) {
+        return 0.0;
+    }
+    if (value >= endRatio) {
+        return 1.0;
+    }
+    const double t = (value - startRatio) / (endRatio - startRatio);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+double buildEffectiveSpreadAngle(double spreadRatio, double rootFlexRatio, const SpreadPairConfig& spreadConfig) {
+    const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle * spreadConfig.angleScale;
+    const double suppressRatio = getSmoothstepRatio(
+        kFoldSpreadSuppressStartRatio,
+        kFoldSpreadSuppressEndRatio,
+        rootFlexRatio);
+    return rawSpreadAngle * (1.0 - suppressRatio);
+}
+
 void clearOutputValueList(float angleValueList[], std::size_t valueCount) {
     for (std::size_t valueIndex = 0; valueIndex < valueCount; ++valueIndex) {
         angleValueList[valueIndex] = 0.0f;
@@ -162,6 +191,10 @@ void HandAngleAlgorithm::applyStageCalibrationValue(
             targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
         }
         targetValueList[toChannelArrayIndex(16)] = averageValueList[toChannelArrayIndex(16)];
+        if (!isFlexChannelIndex(kThumbInwardGateChannel) && kThumbInwardGateChannel != 16) {
+            targetValueList[toChannelArrayIndex(kThumbInwardGateChannel)] =
+                averageValueList[toChannelArrayIndex(kThumbInwardGateChannel)];
+        }
         fistCalibrationValueList_ = targetValueList;
         hasFistCalibration_ = true;
         return;
@@ -276,16 +309,16 @@ double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue)
         kSpreadDeadbandRatio);
 }
 
-double HandAngleAlgorithm::getThumbGateRatio(double ch18Value) {
+double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCount>& channelValueList) {
     if (!hasClosedCalibration_ || !hasFistCalibration_) {
         return 0.0;
     }
     // 第一层：AD 值 → 原始门控比例 [0, 1]
-    // CH18 同时用于拇指 MCP 弯曲和拇指内收门控；CH19 只保留为原始监视通道。
+    // 门控通道由 kThumbInwardGateChannel 配置，可选 CH18 或 CH19。
     double rawRatio = calculateChannelRatio(
-        ch18Value,
-        closedCalibrationValueList_[toChannelArrayIndex(18)],
-        fistCalibrationValueList_[toChannelArrayIndex(18)]);
+        channelValueList[toChannelArrayIndex(kThumbInwardGateChannel)],
+        closedCalibrationValueList_[toChannelArrayIndex(kThumbInwardGateChannel)],
+        fistCalibrationValueList_[toChannelArrayIndex(kThumbInwardGateChannel)]);
 
     // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
     thumbGateFilterDeque_.push_back(rawRatio);
@@ -302,15 +335,7 @@ double HandAngleAlgorithm::getThumbGateRatio(double ch18Value) {
     filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, kThumbGateDeadbandRatio);
 
     // 第四层：smoothstep 重新映射 [startRatio, endRatio] → [0, 1]
-    if (filteredRatio <= kThumbFlexGateStartRatio) {
-        return 0.0;
-    }
-    if (filteredRatio >= kThumbFlexGateEndRatio) {
-        return 1.0;
-    }
-    double t = (filteredRatio - kThumbFlexGateStartRatio)
-             / (kThumbFlexGateEndRatio - kThumbFlexGateStartRatio);
-    return t * t * (3.0 - 2.0 * t);
+    return getSmoothstepRatio(kThumbFlexGateStartRatio, kThumbFlexGateEndRatio, filteredRatio);
 }
 
 void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue) {
@@ -330,48 +355,97 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
     const FingerChannelModel& ringChannelModel = kFingerChannelModelByIndex[static_cast<std::size_t>(FourFingerIndex::Ring)];
     const FingerChannelModel& littleChannelModel = kFingerChannelModelByIndex[static_cast<std::size_t>(FourFingerIndex::Little)];
 
+    const double indexRootFlexRatio = getFlexRatio(
+        indexChannelModel.rootFlexChannel,
+        channelValueList[toChannelArrayIndex(indexChannelModel.rootFlexChannel)]);
+    const double indexJointFlexRatio1 = getFlexRatio(
+        indexChannelModel.jointFlexChannel1,
+        channelValueList[toChannelArrayIndex(indexChannelModel.jointFlexChannel1)]);
+    const double indexJointFlexRatio2 = getFlexRatio(
+        indexChannelModel.jointFlexChannel2,
+        channelValueList[toChannelArrayIndex(indexChannelModel.jointFlexChannel2)]);
+    const double middleRootFlexRatio = getFlexRatio(
+        middleChannelModel.rootFlexChannel,
+        channelValueList[toChannelArrayIndex(middleChannelModel.rootFlexChannel)]);
+    const double middleJointFlexRatio1 = getFlexRatio(
+        middleChannelModel.jointFlexChannel1,
+        channelValueList[toChannelArrayIndex(middleChannelModel.jointFlexChannel1)]);
+    const double middleJointFlexRatio2 = getFlexRatio(
+        middleChannelModel.jointFlexChannel2,
+        channelValueList[toChannelArrayIndex(middleChannelModel.jointFlexChannel2)]);
+    const double ringRootFlexRatio = getFlexRatio(
+        ringChannelModel.rootFlexChannel,
+        channelValueList[toChannelArrayIndex(ringChannelModel.rootFlexChannel)]);
+    const double ringJointFlexRatio1 = getFlexRatio(
+        ringChannelModel.jointFlexChannel1,
+        channelValueList[toChannelArrayIndex(ringChannelModel.jointFlexChannel1)]);
+    const double ringJointFlexRatio2 = getFlexRatio(
+        ringChannelModel.jointFlexChannel2,
+        channelValueList[toChannelArrayIndex(ringChannelModel.jointFlexChannel2)]);
+    const double littleRootFlexRatio = getFlexRatio(
+        littleChannelModel.rootFlexChannel,
+        channelValueList[toChannelArrayIndex(littleChannelModel.rootFlexChannel)]);
+    const double littleJointFlexRatio1 = getFlexRatio(
+        littleChannelModel.jointFlexChannel1,
+        channelValueList[toChannelArrayIndex(littleChannelModel.jointFlexChannel1)]);
+    const double littleJointFlexRatio2 = getFlexRatio(
+        littleChannelModel.jointFlexChannel2,
+        channelValueList[toChannelArrayIndex(littleChannelModel.jointFlexChannel2)]);
+
     fillFingerOutput(
         outputValue.index_finger,
-        getFlexRatio(indexChannelModel.rootFlexChannel, channelValueList[toChannelArrayIndex(indexChannelModel.rootFlexChannel)]),
-        getFlexRatio(indexChannelModel.jointFlexChannel1, channelValueList[toChannelArrayIndex(indexChannelModel.jointFlexChannel1)]),
-        getFlexRatio(indexChannelModel.jointFlexChannel2, channelValueList[toChannelArrayIndex(indexChannelModel.jointFlexChannel2)]),
+        indexRootFlexRatio,
+        indexJointFlexRatio1,
+        indexJointFlexRatio2,
         kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Index)]);
 
     fillFingerOutput(
         outputValue.middle_finger,
-        getFlexRatio(middleChannelModel.rootFlexChannel, channelValueList[toChannelArrayIndex(middleChannelModel.rootFlexChannel)]),
-        getFlexRatio(middleChannelModel.jointFlexChannel1, channelValueList[toChannelArrayIndex(middleChannelModel.jointFlexChannel1)]),
-        getFlexRatio(middleChannelModel.jointFlexChannel2, channelValueList[toChannelArrayIndex(middleChannelModel.jointFlexChannel2)]),
+        middleRootFlexRatio,
+        middleJointFlexRatio1,
+        middleJointFlexRatio2,
         kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Middle)]);
 
     fillFingerOutput(
         outputValue.ring_finger,
-        getFlexRatio(ringChannelModel.rootFlexChannel, channelValueList[toChannelArrayIndex(ringChannelModel.rootFlexChannel)]),
-        getFlexRatio(ringChannelModel.jointFlexChannel1, channelValueList[toChannelArrayIndex(ringChannelModel.jointFlexChannel1)]),
-        getFlexRatio(ringChannelModel.jointFlexChannel2, channelValueList[toChannelArrayIndex(ringChannelModel.jointFlexChannel2)]),
+        ringRootFlexRatio,
+        ringJointFlexRatio1,
+        ringJointFlexRatio2,
         kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Ring)]);
 
     fillFingerOutput(
         outputValue.little_finger,
-        getFlexRatio(littleChannelModel.rootFlexChannel, channelValueList[toChannelArrayIndex(littleChannelModel.rootFlexChannel)]),
-        getFlexRatio(littleChannelModel.jointFlexChannel1, channelValueList[toChannelArrayIndex(littleChannelModel.jointFlexChannel1)]),
-        getFlexRatio(littleChannelModel.jointFlexChannel2, channelValueList[toChannelArrayIndex(littleChannelModel.jointFlexChannel2)]),
+        littleRootFlexRatio,
+        littleJointFlexRatio1,
+        littleJointFlexRatio2,
         kFingerFlexAngleModelByIndex[static_cast<std::size_t>(FourFingerIndex::Little)]);
 
     outputValue.thumb[0] = convertAngleToFloat(getFlexRatio(18, channelValueList[toChannelArrayIndex(18)]) * kThumbFlexAngleModel.mcpHoldDeltaAngle);
     outputValue.thumb[1] = convertAngleToFloat(getFlexRatio(17, channelValueList[toChannelArrayIndex(17)]) * kThumbFlexAngleModel.ipHoldDeltaAngle);
 
-    // 四指展开角：ratio × openRootAngle × angleScale
+    // 四指展开角：先按 AD 计算原始展开角，再按对应外侧手指根节弯曲做算法层收束。
+    const SpreadPairConfig& ringPinkySpreadConfig = kSpreadPairConfigList[0];
+    const SpreadPairConfig& middleRingSpreadConfig = kSpreadPairConfigList[1];
+    const SpreadPairConfig& indexMiddleSpreadConfig = kSpreadPairConfigList[2];
     outputValue.index_finger[3] = convertAngleToFloat(
-        getSpreadRatio(12, channelValueList[toChannelArrayIndex(12)]) * 25.0 * 1.12);
+        buildEffectiveSpreadAngle(
+            getSpreadRatio(indexMiddleSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(indexMiddleSpreadConfig.channelIndex)]),
+            indexRootFlexRatio,
+            indexMiddleSpreadConfig));
     outputValue.ring_finger[3] = convertAngleToFloat(
-        getSpreadRatio(8, channelValueList[toChannelArrayIndex(8)]) * 20.0 * 1.30);
+        buildEffectiveSpreadAngle(
+            getSpreadRatio(middleRingSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(middleRingSpreadConfig.channelIndex)]),
+            ringRootFlexRatio,
+            middleRingSpreadConfig));
     outputValue.little_finger[3] = convertAngleToFloat(
-        getSpreadRatio(4, channelValueList[toChannelArrayIndex(4)]) * 25.0 * 1.40);
+        buildEffectiveSpreadAngle(
+            getSpreadRatio(ringPinkySpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(ringPinkySpreadConfig.channelIndex)]),
+            littleRootFlexRatio,
+            ringPinkySpreadConfig));
 
     // 拇指展开（有符号，正=外展，负=内收）
     double spreadRatio16 = getSpreadRatio(16, channelValueList[toChannelArrayIndex(16)]);
-    double gateRatio = getThumbGateRatio(channelValueList[toChannelArrayIndex(18)]);
+    double gateRatio = getThumbGateRatio(channelValueList);
     double amplitudeRatio = getFlexRatio(16, channelValueList[toChannelArrayIndex(16)]);
     double outwardRatio = spreadRatio16 * (1.0 - gateRatio);
     double inwardRatio = amplitudeRatio * gateRatio;
