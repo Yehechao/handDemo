@@ -134,10 +134,10 @@ struct FingerFlexAngleModel {
 // 对齐 Python kinematics.fingerModelByFingerName:
 // index/middle/ring/pinky: holdRootAngle=85, holdJointAngleList=[100, 75]
 constexpr std::array<FingerFlexAngleModel, 4> kFingerFlexAngleModelByIndex = {{
-    {85.0, 100.0, 75.0},  // 食指
-    {85.0, 100.0, 75.0},  // 中指
-    {85.0, 100.0, 75.0},  // 无名指
-    {85.0, 100.0, 75.0},  // 小指
+    {90.0, 90.0, 90.0},  // 食指
+    {90.0, 90.0, 90.0},  // 中指
+    {90.0, 90.0, 90.0},  // 无名指
+    {90.0, 90.0, 90.0},  // 小指
 }};
 
 // ThumbFlexAngleModel: 拇指两级弯曲角上限定义，单位为度。
@@ -151,8 +151,8 @@ struct ThumbFlexAngleModel {
 
 // holdSegment34Angle=70 (CH18), holdSegment23Angle=60 (CH17)
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
-    85.0,
-    85.0,
+    90.0,
+    90.0,
 };
 
 }  // namespace handdemo
