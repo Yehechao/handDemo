@@ -28,16 +28,12 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
 // kMeanFilterWindowFrameCount: 算法内部实时均值滤波窗口大小，表示最近 15 帧。
 constexpr std::size_t kMeanFilterWindowFrameCount = 15;
-
 // kThumbGateFilterWindowSize: 拇指门控比例独立滤波窗口大小，
 constexpr std::size_t kThumbGateFilterWindowSize = 10;
-
-// ==================== 4. ratio 稳定层参数 ====================
-
 // kFlexDeadbandRatio: 弯曲 ratio 的死区。
 constexpr double kFlexDeadbandRatio = 0.0;
 
-// ==================== 5. 展开（Spread）参数 ====================
+// ==================== 4. 展开（Spread）参数 ====================
 
 // kSpreadChannelIndexList: 展开通道编号列表（CH4/8/12/16）。
 constexpr std::array<int, 4> kSpreadChannelIndexList = {4, 8, 12, 16};
@@ -63,7 +59,7 @@ constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
 constexpr double kThumbOpenPalmAngle = 45.0;
 constexpr double kThumbInwardPalmAngle = 45.0;
 
-// kThumbInwardGateChannel: 拇指内收门控通道，可选 CH18 或 CH19，默认 CH18。
+// kThumbInwardGateChannel: 拇指开合方向通道，CH18或者CH19
 constexpr int kThumbInwardGateChannel = 18;
 
 // kThumbFlexGateStartRatio/kThumbFlexGateEndRatio: 拇指内收门控 smoothstep 映射区间。
@@ -80,7 +76,7 @@ constexpr double kSpreadDeadbandRatio = 0.0;
 constexpr double kFoldSpreadSuppressStartRatio = 0.25;
 constexpr double kFoldSpreadSuppressEndRatio = 0.75;
 
-// ==================== 6. 通道映射参数 ====================
+// ==================== 5. 通道映射参数 ====================
 
 // kFlexChannelIndexList: 所有参与弯曲校准和滤波输出的通道编号集合。
 constexpr std::array<int, 14> kFlexChannelIndexList = {
@@ -119,7 +115,7 @@ constexpr std::array<FingerChannelModel, 4> kFingerChannelModelByIndex = {{
     {3, 2, 1},
 }};
 
-// ==================== 7. 输出角度协议参数 ====================
+// ==================== 6. 输出角度协议参数 ====================
 
 // FingerFlexAngleModel: 单根四指的弯曲角上限定义，单位为度。
 struct FingerFlexAngleModel {
