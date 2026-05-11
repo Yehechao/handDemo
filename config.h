@@ -58,7 +58,6 @@ constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
 // kThumbOpenPalmAngle/kThumbInwardPalmAngle: 拇指外展/内收最大角度，单位度。
 constexpr double kThumbOpenPalmAngle = 45.0;
 constexpr double kThumbInwardPalmAngle = 45.0;
-
 // kThumbInwardGateChannel: 拇指开合方向通道，CH18或者CH19
 constexpr int kThumbInwardGateChannel = 18;
 
