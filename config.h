@@ -17,8 +17,7 @@ constexpr int16_t kAdMaxValue = 4096;
 
 // ==================== 2. 校准流程参数 ====================
 
-// kSamplingDurationMs: 每个校准阶段的采样时长，单位毫秒。
-// 纯弯曲版本只保留 closed 和 fist 两步校准。
+// kSamplingDurationMs: 三步校准中每个阶段的采样时长，单位毫秒。
 constexpr int kSamplingDurationMs = 2000;
 
 // kMaxSamplingFrameCount: 单次校准允许缓存的最大帧数。
@@ -150,7 +149,7 @@ struct ThumbFlexAngleModel {
 // holdSegment23Angle=85 (CH17), holdSegment34Angle=85 (CH18)
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
     85.0,
-    85.0,
+    90.0,
 };
 
 }  // namespace handdemo

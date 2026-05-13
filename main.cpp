@@ -150,6 +150,7 @@ void printOutputValue(const HandAngleOutput& outputValue) {
               << (outputValue.thumb[2] >= 0 ? "(外展)" : "(内收)") << std::endl;
 }
 
+
 }  // namespace
 
 int main() {
