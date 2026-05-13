@@ -65,6 +65,7 @@ Closed -> Fist -> Spread
 ```cpp
 class HandAngleAlgorithm {
 public:
+    bool setRuntimeConfig(const RuntimeConfig& runtimeConfig);
     void reset();
     void beginCalibration(CalibrationStage stage);
     bool pushCalibrationFrame(const int16_t adValues[kChannelCount]);
@@ -169,7 +170,7 @@ constexpr int kThumbInwardGateChannel = 18;
 18 或 19
 ```
 
-默认是 `CH18`。如果改为 `19`，重新编译后 C++ 会使用 `CH19` 作为拇指内收门控。
+默认是 `CH18`。可通过 `RuntimeConfig` 在初始化时覆盖为 `CH19`，不调用时继续使用 `config.h` 默认值。
 
 拇指开合公式：
 
@@ -210,6 +211,25 @@ constexpr double kThumbGateDeadbandRatio = 0.0;
 
 `0.0` 表示不额外压制细小 ratio 变化。
 
+如需在打包 DLL 后由外部配置文件覆盖部分参数，可在校准前调用：
+
+```cpp
+HandAngleAlgorithm algorithm;
+
+RuntimeConfig runtimeConfig;
+runtimeConfig.meanFilterWindowFrameCount = 15;
+runtimeConfig.thumbGateFilterWindowSize = 10;
+runtimeConfig.thumbInwardGateChannel = 18;
+runtimeConfig.thumbGateDeadbandRatio = 0.0;
+runtimeConfig.spreadDeadbandRatio = 0.0;
+
+if (!algorithm.setRuntimeConfig(runtimeConfig)) {
+    // 配置非法：窗口必须大于 0，门控通道只允许 18 或 19，deadband 范围为 0.0~1.0
+}
+```
+
+调用成功后算法会清空旧校准、滤波和稳定状态；因此建议在开始三步校准前调用。
+
 ## 8. 与 Python 版本的关系
 
 当前 C++ 算法已对齐 Python 的主要计算逻辑：
@@ -223,7 +243,7 @@ constexpr double kThumbGateDeadbandRatio = 0.0;
 
 已知差异：
 
-- C++ 原始 AD 均值滤波固定为 15 帧。
+- C++ 原始 AD 均值滤波默认 15 帧，可通过 `RuntimeConfig` 覆盖。
 - Python 默认滤波窗口来自 `config.json`，当前为 10 帧，并可在 UI 中调整。
 - C++ 当前没有 Python 的 UI、动画、语言切换和通道监视器。
 
