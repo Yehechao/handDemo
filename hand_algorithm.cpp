@@ -53,6 +53,10 @@ bool isFlexChannelIndex(int channelIndex) {
     return false;
 }
 
+bool isValidThumbInwardGateChannel(int channelIndex) {
+    return channelIndex == 18 || channelIndex == 19;
+}
+
 double getSmoothstepRatio(double startRatio, double endRatio, double value) {
     if (value <= startRatio) {
         return 0.0;
@@ -83,6 +87,24 @@ void clearOutputValueList(float angleValueList[], std::size_t valueCount) {
 
 HandAngleAlgorithm::HandAngleAlgorithm() {
     reset();
+}
+
+bool HandAngleAlgorithm::setRuntimeConfig(const RuntimeConfig& runtimeConfig) {
+    if (runtimeConfig.meanFilterWindowFrameCount == 0 ||
+        runtimeConfig.thumbGateFilterWindowSize == 0 ||
+        !isValidThumbInwardGateChannel(runtimeConfig.thumbInwardGateChannel) ||
+        !std::isfinite(runtimeConfig.thumbGateDeadbandRatio) ||
+        !std::isfinite(runtimeConfig.spreadDeadbandRatio) ||
+        runtimeConfig.thumbGateDeadbandRatio < 0.0 ||
+        runtimeConfig.thumbGateDeadbandRatio > 1.0 ||
+        runtimeConfig.spreadDeadbandRatio < 0.0 ||
+        runtimeConfig.spreadDeadbandRatio > 1.0) {
+        return false;
+    }
+
+    runtimeConfig_ = runtimeConfig;
+    reset();
+    return true;
 }
 
 void HandAngleAlgorithm::resetSamplingState() {
@@ -191,9 +213,9 @@ void HandAngleAlgorithm::applyStageCalibrationValue(
             targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
         }
         targetValueList[toChannelArrayIndex(16)] = averageValueList[toChannelArrayIndex(16)];
-        if (!isFlexChannelIndex(kThumbInwardGateChannel) && kThumbInwardGateChannel != 16) {
-            targetValueList[toChannelArrayIndex(kThumbInwardGateChannel)] =
-                averageValueList[toChannelArrayIndex(kThumbInwardGateChannel)];
+        if (!isFlexChannelIndex(runtimeConfig_.thumbInwardGateChannel) && runtimeConfig_.thumbInwardGateChannel != 16) {
+            targetValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)] =
+                averageValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)];
         }
         fistCalibrationValueList_ = targetValueList;
         hasFistCalibration_ = true;
@@ -236,7 +258,7 @@ std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueL
         rawFilterState_.sumValueList[channelIndex] += currentFrameValueList[channelIndex];
     }
 
-    if (rawFilterState_.frameWindowList.size() > kMeanFilterWindowFrameCount) {
+    if (rawFilterState_.frameWindowList.size() > runtimeConfig_.meanFilterWindowFrameCount) {
         const auto& expiredFrameValueList = rawFilterState_.frameWindowList.front();
         for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
             rawFilterState_.sumValueList[channelIndex] -= expiredFrameValueList[channelIndex];
@@ -250,7 +272,7 @@ std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueL
         return rawFilterState_.filteredValueList;
     }
 
-    // 串口输入层不做平滑，算法内部保留“前 14 帧 + 当前帧”的 15 帧实时均值窗口。
+    // 串口输入层不做平滑，算法内部保留可配置帧数的实时均值窗口。
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
         rawFilterState_.filteredValueList[channelIndex] = rawFilterState_.sumValueList[channelIndex] / frameCountValue;
     }
@@ -306,7 +328,7 @@ double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue)
     return stabilizeRatio(
         spreadStableStateByChannel_[toChannelArrayIndex(channelIndex)],
         ratioValue,
-        kSpreadDeadbandRatio);
+        runtimeConfig_.spreadDeadbandRatio);
 }
 
 double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCount>& channelValueList) {
@@ -314,15 +336,15 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
         return 0.0;
     }
     // 第一层：AD 值 → 原始门控比例 [0, 1]
-    // 门控通道由 kThumbInwardGateChannel 配置，可选 CH18 或 CH19。
+    // 门控通道可通过运行时配置覆盖，默认来自 config.h。
     double rawRatio = calculateChannelRatio(
-        channelValueList[toChannelArrayIndex(kThumbInwardGateChannel)],
-        closedCalibrationValueList_[toChannelArrayIndex(kThumbInwardGateChannel)],
-        fistCalibrationValueList_[toChannelArrayIndex(kThumbInwardGateChannel)]);
+        channelValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
+        closedCalibrationValueList_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
+        fistCalibrationValueList_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)]);
 
     // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
     thumbGateFilterDeque_.push_back(rawRatio);
-    if (thumbGateFilterDeque_.size() > kThumbGateFilterWindowSize) {
+    if (thumbGateFilterDeque_.size() > runtimeConfig_.thumbGateFilterWindowSize) {
         thumbGateFilterDeque_.pop_front();
     }
     double filteredRatio = 0.0;
@@ -332,7 +354,7 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
     filteredRatio /= static_cast<double>(thumbGateFilterDeque_.size());
 
     // 第三层：死区稳定（对齐 Python stabilizeRatio）
-    filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, kThumbGateDeadbandRatio);
+    filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, runtimeConfig_.thumbGateDeadbandRatio);
 
     // 第四层：smoothstep 重新映射 [startRatio, endRatio] → [0, 1]
     return getSmoothstepRatio(kThumbFlexGateStartRatio, kThumbFlexGateEndRatio, filteredRatio);

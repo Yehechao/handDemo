@@ -16,6 +16,7 @@ namespace {
 using handdemo::CalibrationStage;
 using handdemo::HandAngleAlgorithm;
 using handdemo::HandAngleOutput;
+using handdemo::RuntimeConfig;
 using handdemo::SerialFrameReceiver;
 using handdemo::SerialPollResult;
 using handdemo::kChannelCount;
@@ -158,6 +159,17 @@ int main() {
     SetConsoleCP(CP_UTF8);
 
     HandAngleAlgorithm algorithm;
+    RuntimeConfig runtimeConfig;
+    runtimeConfig.meanFilterWindowFrameCount = 15;
+    runtimeConfig.thumbGateFilterWindowSize = 10;
+    runtimeConfig.thumbInwardGateChannel = 18;
+    runtimeConfig.thumbGateDeadbandRatio = 0.0;
+    runtimeConfig.spreadDeadbandRatio = 0.0;
+    if (!algorithm.setRuntimeConfig(runtimeConfig)) {
+        std::cout << "运行时参数配置非法，程序退出。" << std::endl;
+        return 1;
+    }
+
     HandAngleOutput outputValue{};
     SerialFrameReceiver serialFrameReceiver;
     std::array<int16_t, kChannelCount> latestFrameValueList{};

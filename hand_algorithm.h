@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 
@@ -22,10 +23,20 @@ struct HandAngleOutput {
     float thumb[3];          // [MCP, IP, thumb-index_spread]  正=外展, 负=内收
 };
 
+struct RuntimeConfig {
+    std::size_t meanFilterWindowFrameCount = kMeanFilterWindowFrameCount;
+    std::size_t thumbGateFilterWindowSize = kThumbGateFilterWindowSize;
+    int thumbInwardGateChannel = kThumbInwardGateChannel;
+    double thumbGateDeadbandRatio = kThumbGateDeadbandRatio;
+    double spreadDeadbandRatio = kSpreadDeadbandRatio;
+};
+
 class HandAngleAlgorithm {
 public:
     HandAngleAlgorithm();
 
+    // setRuntimeConfig: 覆盖部分默认参数，在校准前调用；
+    bool setRuntimeConfig(const RuntimeConfig& runtimeConfig);
     // reset: 清空全部校准状态和滤波状态
     void reset();
     void beginCalibration(CalibrationStage stage);
@@ -79,6 +90,7 @@ private:
     bool hasFistCalibration_ = false;
     bool hasSpreadCalibration_ = false;
 
+    RuntimeConfig runtimeConfig_{};
     SamplingState samplingState_{};
     RawFilterState rawFilterState_{};
     std::array<RatioStableState, kChannelCount> flexStableStateByChannel_{};
