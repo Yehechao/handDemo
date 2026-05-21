@@ -70,9 +70,9 @@ constexpr double kThumbGateDeadbandRatio = 0.0;
 // kSpreadDeadbandRatio: 展开 ratio 死区。
 constexpr double kSpreadDeadbandRatio = 0.0;
 
-// kFoldSpreadSuppress*: 根节弯曲触发展开角算法收束，中节/末节不触发。
-constexpr double kFoldSpreadSuppressStartRatio = 0.25;
-constexpr double kFoldSpreadSuppressEndRatio = 0.75;
+// kFoldSpreadSuppress*: 相邻第一指节弯曲触发展开角算法收束，中节/末节不触发。
+constexpr double kFoldSpreadSuppressStartRatio = 0.10;
+constexpr double kFoldSpreadSuppressEndRatio = 0.60;
 
 // ==================== 5. 通道映射参数 ====================
 

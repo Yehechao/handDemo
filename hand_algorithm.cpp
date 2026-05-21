@@ -1,5 +1,6 @@
-#include "hand_algorithm.h"
+﻿#include "hand_algorithm.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -68,12 +69,12 @@ double getSmoothstepRatio(double startRatio, double endRatio, double value) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-double buildEffectiveSpreadAngle(double spreadRatio, double rootFlexRatio, const SpreadPairConfig& spreadConfig) {
+double buildEffectiveSpreadAngle(double spreadRatio, double adjacentRootFlexRatio, const SpreadPairConfig& spreadConfig) {
     const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle * spreadConfig.angleScale;
     const double suppressRatio = getSmoothstepRatio(
         kFoldSpreadSuppressStartRatio,
         kFoldSpreadSuppressEndRatio,
-        rootFlexRatio);
+        adjacentRootFlexRatio);
     return rawSpreadAngle * (1.0 - suppressRatio);
 }
 
@@ -445,24 +446,24 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
     outputValue.thumb[0] = convertAngleToFloat(getFlexRatio(18, channelValueList[toChannelArrayIndex(18)]) * kThumbFlexAngleModel.mcpHoldDeltaAngle);
     outputValue.thumb[1] = convertAngleToFloat(getFlexRatio(17, channelValueList[toChannelArrayIndex(17)]) * kThumbFlexAngleModel.ipHoldDeltaAngle);
 
-    // 四指展开角：先按 AD 计算原始展开角，再按对应外侧手指根节弯曲做算法层收束。
+    // 四指展开角：先按 AD 计算原始展开角，再按相邻两侧第一指节弯曲做算法层收束。
     const SpreadPairConfig& ringPinkySpreadConfig = kSpreadPairConfigList[0];
     const SpreadPairConfig& middleRingSpreadConfig = kSpreadPairConfigList[1];
     const SpreadPairConfig& indexMiddleSpreadConfig = kSpreadPairConfigList[2];
     outputValue.index_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(indexMiddleSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(indexMiddleSpreadConfig.channelIndex)]),
-            indexRootFlexRatio,
+            std::max(indexRootFlexRatio, middleRootFlexRatio),
             indexMiddleSpreadConfig));
     outputValue.ring_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(middleRingSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(middleRingSpreadConfig.channelIndex)]),
-            ringRootFlexRatio,
+            std::max(middleRootFlexRatio, ringRootFlexRatio),
             middleRingSpreadConfig));
     outputValue.little_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(ringPinkySpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(ringPinkySpreadConfig.channelIndex)]),
-            littleRootFlexRatio,
+            std::max(ringRootFlexRatio, littleRootFlexRatio),
             ringPinkySpreadConfig));
 
     // 拇指展开（有符号，正=外展，负=内收）

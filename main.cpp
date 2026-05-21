@@ -165,7 +165,7 @@ int main() {
     runtimeConfig.thumbInwardGateChannel = 18;
     runtimeConfig.thumbGateDeadbandRatio = 0.0;
     runtimeConfig.spreadDeadbandRatio = 0.0;
-    algorithm.setRuntimeConfig(runtimeConfig)
+    algorithm.setRuntimeConfig(runtimeConfig);
    
     HandAngleOutput outputValue{};
     SerialFrameReceiver serialFrameReceiver;

@@ -136,23 +136,23 @@ CH17 / CH18 = 85 / 85
 
 ### 四指展开角收束
 
-展开通道先根据 `Closed -> Spread` 计算原始展开角，然后在算法层按对应根节弯曲收束：
+展开通道先根据 `Closed -> Spread` 计算原始展开角，然后在算法层按相邻两侧第一指节弯曲收束：
 
 ```text
 rawSpreadAngle = spreadRatio * maxSpreadAngle * angleScale
-suppressRatio = smoothstep(0.25, 0.75, rootFlexRatio)
+suppressRatio = smoothstep(0.10, 0.60, max(leftRootFlexRatio, rightRootFlexRatio))
 effectiveSpreadAngle = rawSpreadAngle * (1 - suppressRatio)
 ```
 
 收束对应关系：
 
 ```text
-CH12 食指-中指展开 -> 食指根节 CH15
-CH8  中指-无名指展开 -> 无名指根节 CH7
-CH4  无名指-小指展开 -> 小指根节 CH3
+CH12 食指-中指展开 -> max(食指根节 CH15, 中指根节 CH11)
+CH8  中指-无名指展开 -> max(中指根节 CH11, 无名指根节 CH7)
+CH4  无名指-小指展开 -> max(无名指根节 CH7, 小指根节 CH3)
 ```
 
-中节/末节弯曲不触发展开收束。
+中节/末节弯曲不触发展开收束，拇指 CH16 仍走独立开合和门控逻辑。
 
 ### 拇指开合
 
