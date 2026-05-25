@@ -146,7 +146,7 @@ struct ThumbFlexAngleModel {
     double ipHoldDeltaAngle;
 };
 
-// holdSegment23Angle=85 (CH17), holdSegment34Angle=85 (CH18)
+// holdSegment23Angle=85 (CH18), holdSegment34Angle=85 (CH17)
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
     85.0,
     90.0,
