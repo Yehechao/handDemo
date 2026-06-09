@@ -1,3 +1,5 @@
+﻿// Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
+
 #include <windows.h>
 
 #include <conio.h>
@@ -21,6 +23,7 @@ using handdemo::SerialFrameReceiver;
 using handdemo::SerialPollResult;
 using handdemo::kChannelCount;
 using handdemo::kSamplingDurationMs;
+using handdemo::ConnectionMode;
 using handdemo::kCrosstalkSamplingDurationMs;
 
 struct SamplingRuntimeState {
@@ -35,6 +38,7 @@ enum class KeyboardCommand {
     StartCalibration = 1,
     ResetCalibration = 2,
     QuitProgram = 3,
+    ToggleConnectionMode = 4,
 };
 
 const char* getCalibrationStageText(CalibrationStage stage) {
@@ -69,6 +73,9 @@ KeyboardCommand parseKeyValue(int keyValue) {
     }
     if (std::tolower(keyValue) == 'c') {
         return KeyboardCommand::ResetCalibration;
+    }
+    if (std::tolower(keyValue) == 'b') {
+        return KeyboardCommand::ToggleConnectionMode;
     }
     return KeyboardCommand::None;
 }
@@ -132,8 +139,9 @@ void resetCalibration(HandAngleAlgorithm& algorithm, SamplingRuntimeState& state
 }
 
 void printStartupGuide(const SerialFrameReceiver& receiver) {
-    std::cout << "目标硬件: " << receiver.getTargetHardwareIdText() << std::endl;
-    std::cout << "按键: Space=开始校准  C=重置  Q=退出" << std::endl;
+    const char* modeText = receiver.getConnectionMode() == ConnectionMode::Wireless ? "无线" : "有线";
+    std::cout << "连接模式: " << modeText << std::endl;
+    std::cout << "按键: Space=开始校准  C=重置  B=切换有线/无线  Q=退出" << std::endl;
     std::cout << "校准顺序: step1=手指伸直 -> step2=手握拳 -> step3=手展开 -> step4=串扰补偿" << std::endl;
     std::cout << "请按空格开始 step1。" << std::endl;
 }
@@ -177,12 +185,7 @@ int main() {
     SetConsoleCP(CP_UTF8);
 
     HandAngleAlgorithm algorithm;
-    RuntimeConfig runtimeConfig;
-    runtimeConfig.meanFilterWindowFrameCount = 15;
-    runtimeConfig.thumbGateFilterWindowSize = 10;
-    runtimeConfig.thumbInwardGateChannel = 18;
-    runtimeConfig.thumbGateDeadbandRatio = 0.0;
-    runtimeConfig.spreadDeadbandRatio = 0.0;
+    RuntimeConfig runtimeConfig;   
     algorithm.setRuntimeConfig(runtimeConfig);
    
     HandAngleOutput outputValue{};
@@ -204,6 +207,12 @@ int main() {
         if (keyboardCommand == KeyboardCommand::ResetCalibration) {
             resetCalibration(algorithm, samplingRuntimeState, completedCalibrationStepCount);
             std::cout << "已重置校准，请按空格重新开始 step1。" << std::endl;
+        } else if (keyboardCommand == KeyboardCommand::ToggleConnectionMode) {
+            ConnectionMode nextMode = serialFrameReceiver.getConnectionMode() == ConnectionMode::Wired
+                ? ConnectionMode::Wireless : ConnectionMode::Wired;
+            serialFrameReceiver.setConnectionMode(nextMode);
+            const char* modeText = nextMode == ConnectionMode::Wireless ? "无线" : "有线";
+            std::cout << "已切换为" << modeText << "模式，正在重新搜索硬件..." << std::endl;
         } else if (keyboardCommand == KeyboardCommand::StartCalibration) {
             if (samplingRuntimeState.isActive) {
                 std::cout << "当前阶段正在采样中，请等待 2 秒采样结束。" << std::endl;

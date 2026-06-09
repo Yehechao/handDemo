@@ -1,9 +1,12 @@
-﻿#pragma once
+﻿// Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
+
+#pragma once
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <vector>
 
 #include "config.h"
 
@@ -30,6 +33,8 @@ struct RuntimeConfig {
     int thumbInwardGateChannel = kThumbInwardGateChannel;
     double thumbGateDeadbandRatio = kThumbGateDeadbandRatio;
     double spreadDeadbandRatio = kSpreadDeadbandRatio;
+    bool crosstalkFitIntercept = kCrosstalkFitIntercept;
+    double crosstalkMaxAbsIntercept = kCrosstalkMaxAbsIntercept;
 };
 
 // XtalkCoef: 单通道串扰补偿系数，ΔP = aΔT1 + bΔT2 + cΔT3 + d。
@@ -56,6 +61,8 @@ public:
     bool isReady() const;
     // processFrame: 传入一帧 AD 数据并输出弯曲角结构体，未完成校准时返回 false
     bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
+    // getXtalkUnstableChList: 返回串扰校准后 |d| 超限的异常通道列表（1-based CH 编号），客户可据此判断校准稳定性
+    std::vector<int> getXtalkUnstableChList() const;
 
 private:
     struct SampleState {
@@ -94,6 +101,7 @@ private:
     double stabilizeRatio(RatioState& stableState, double ratioValue, double deadbandRatio);
     double getSpreadRatio(int channelIndex, double currentValue);
     double getThumbGateRatio(const std::array<double, kChannelCount>& channelValueList);
+    double getThumbInwardAmplitudeRatio(const std::array<double, kChannelCount>& channelValueList);
     bool isChannelValidForStage(int channelIndex, CalibrationStage stage) const;
 
     // 串扰补偿
@@ -115,11 +123,13 @@ private:
     std::array<RatioState, kChannelCount> spreadStable_{};
     RatioState thumbGateStableState_{};
     std::deque<double> thumbGateFilterDeque_{};
+    RatioState thumbInwardAmplitudeStable_{};
 
     // 串扰补偿
     std::array<XtalkCoef, kChannelCount> xtalkCoef_{};
     std::array<double, kChannelCount> xtalkBase_{};
     bool hasXtalk_ = false;
+    std::vector<int> xtalkUnstableChList_{};
 };
 
 }  

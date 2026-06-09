@@ -1,4 +1,6 @@
-﻿#include "serial_port_io.h"
+﻿// Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
+
+#include "serial_port_io.h"
 
 #include <algorithm>
 #include <setupapi.h>
@@ -21,10 +23,6 @@ enum class ReadFrameResult {
     Disconnected = 2,
 };
 
-// hardwareIdText: 对齐 Python 项目 config.json，当前目标硬件固定为 STM32 虚拟串口
-constexpr wchar_t hardwareIdText[] = L"USB\\VID_0483&PID_5740";
-// baudRateValue: Python 侧没有显式设置波特率，虚拟串口场景这里用常见默认值即可
-constexpr DWORD baudRateValue = 9600;
 // reconnectDelayMs: 未连接或断开后的重试间隔
 constexpr int reconnectDelayMs = 100;
 // maxReadCycleCountPerPoll: 每次轮询尽量多读几次，把驱动层已到达的数据尽快吃干净。
@@ -33,6 +31,8 @@ constexpr int maxReadCycleCountPerPoll = 32;
 constexpr int searchLogIntervalMs = 3000;
 // noFrameLogIntervalMs: 连续无有效帧时的提示阈值
 constexpr int noFrameLogIntervalMs = 5000;
+// 设备扫描间隔（毫秒）
+constexpr int deviceScanIntervalMs = 500;
 // frameHeaderByteList: Python 项目里使用的固定二进制帧头，小端字节序为 A5 5A
 constexpr char frameHeaderByteList[] = {
     static_cast<char>(0xA5),
@@ -392,8 +392,8 @@ std::string getLastErrorMessageText(DWORD errorCodeValue) {
     return toUtf8String(wideMessageText);
 }
 
-std::wstring findMatchedPortName(const std::wstring& targetHardwareIdText) {
-    const std::wstring normalizedTargetHardwareId = normalizeHardwareId(targetHardwareIdText);
+// 遍历硬件 ID 列表，返回第一个匹配设备的端口名。
+std::wstring findMatchedPortName(const wchar_t* const* hardwareIdList, std::size_t listSize) {
     HDEVINFO deviceInfoList = SetupDiGetClassDevsW(&GUID_DEVCLASS_PORTS, nullptr, nullptr, DIGCF_PRESENT);
     if (deviceInfoList == INVALID_HANDLE_VALUE) {
         return L"";
@@ -404,18 +404,37 @@ std::wstring findMatchedPortName(const std::wstring& targetHardwareIdText) {
     deviceInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
     for (DWORD deviceIndex = 0; SetupDiEnumDeviceInfo(deviceInfoList, deviceIndex, &deviceInfoData); ++deviceIndex) {
         const std::wstring currentHardwareId = getDeviceNormalizedHardwareId(deviceInfoList, deviceInfoData);
-        if (currentHardwareId != normalizedTargetHardwareId) {
-            continue;
-        }
 
-        matchedPortName = getPortName(deviceInfoList, deviceInfoData);
-        if (!matchedPortName.empty()) {
-            break;
+        for (std::size_t listIndex = 0; listIndex < listSize; ++listIndex) {
+            if (normalizeHardwareId(hardwareIdList[listIndex]) != currentHardwareId) {
+                continue;
+            }
+
+            matchedPortName = getPortName(deviceInfoList, deviceInfoData);
+            if (!matchedPortName.empty()) {
+                SetupDiDestroyDeviceInfoList(deviceInfoList);
+                return matchedPortName;
+            }
         }
     }
 
     SetupDiDestroyDeviceInfoList(deviceInfoList);
-    return matchedPortName;
+    return L"";
+}
+
+// getActiveHardwareIdList: 根据当前模式返回对应的硬件 ID 列表及长度。
+void getActiveHardwareIdList(ConnectionMode mode, const wchar_t* const*& list, std::size_t& count) {
+    if (mode == ConnectionMode::Wireless) {
+        list = kWirelessHardwareIdList;
+        count = sizeof(kWirelessHardwareIdList) / sizeof(kWirelessHardwareIdList[0]);
+    } else {
+        list = kWiredHardwareIdList;
+        count = sizeof(kWiredHardwareIdList) / sizeof(kWiredHardwareIdList[0]);
+    }
+}
+
+std::string getConnectionModeText(ConnectionMode mode) {
+    return mode == ConnectionMode::Wireless ? "无线" : "有线";
 }
 
 HANDLE openSerialPort(const std::wstring& portName, DWORD baudRateValue, std::string& errorMessageText) {
@@ -587,6 +606,7 @@ SerialFrameReceiver::SerialFrameReceiver() {
     lastSearchLogTimePoint_ = initialTimePoint - std::chrono::milliseconds(searchLogIntervalMs);
     lastNoFrameLogTimePoint_ = initialTimePoint;
     lastValidFrameTimePoint_ = initialTimePoint;
+    lastDeviceScanTimePoint_ = initialTimePoint;
 }
 
 SerialFrameReceiver::~SerialFrameReceiver() {
@@ -607,16 +627,33 @@ void SerialFrameReceiver::closePort() {
     hasLoggedFirstFrame_ = false;
 }
 
+void SerialFrameReceiver::setConnectionMode(ConnectionMode mode) {
+    if (connectionMode_ == mode) {
+        return;
+    }
+    connectionMode_ = mode;
+    closePort();
+}
+
+ConnectionMode SerialFrameReceiver::getConnectionMode() const {
+    return connectionMode_;
+}
+
 SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& latestFrameValueList) {
     SerialPollResult pollResult;
     const auto currentTimePoint = std::chrono::steady_clock::now();
 
     if (serialHandle_ == INVALID_HANDLE_VALUE) {
-        const std::wstring matchedPortName = findMatchedPortName(hardwareIdText);
+        const wchar_t* const* activeHardwareIdList = nullptr;
+        std::size_t activeHardwareIdCount = 0;
+        getActiveHardwareIdList(connectionMode_, activeHardwareIdList, activeHardwareIdCount);
+
+        const std::wstring matchedPortName = findMatchedPortName(activeHardwareIdList, activeHardwareIdCount);
         if (matchedPortName.empty()) {
             if (std::chrono::duration_cast<std::chrono::milliseconds>(currentTimePoint - lastSearchLogTimePoint_).count() >= searchLogIntervalMs) {
                 pollResult.hasStatusMessage = true;
-                pollResult.statusMessage = "搜索状态: 尚未找到目标硬件，继续轮询中...";
+                pollResult.statusMessage = std::string("搜索状态[") + getConnectionModeText(connectionMode_) +
+                    "]: 尚未找到目标硬件，继续轮询中...";
                 lastSearchLogTimePoint_ = currentTimePoint;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(reconnectDelayMs));
@@ -624,12 +661,12 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
         }
 
         std::string openErrorMessageText;
-        serialHandle_ = openSerialPort(matchedPortName, baudRateValue, openErrorMessageText);
+        serialHandle_ = openSerialPort(matchedPortName, kSerialBaudRate, openErrorMessageText);
         if (serialHandle_ == INVALID_HANDLE_VALUE) {
             pollResult.hasStatusMessage = true;
             pollResult.statusMessage =
-                "打开串口失败: " + toUtf8String(matchedPortName) +
-                "，" + openErrorMessageText;
+                std::string("打开串口失败[") + getConnectionModeText(connectionMode_) + "]: " +
+                toUtf8String(matchedPortName) + "，" + openErrorMessageText;
             std::this_thread::sleep_for(std::chrono::milliseconds(reconnectDelayMs));
             return pollResult;
         }
@@ -643,9 +680,27 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
         hasLoggedFirstFrame_ = false;
         lastNoFrameLogTimePoint_ = currentTimePoint;
         lastValidFrameTimePoint_ = currentTimePoint;
+        lastDeviceScanTimePoint_ = currentTimePoint;
         pollResult.hasStatusMessage = true;
-        pollResult.statusMessage = "已连接硬件: " + currentPortNameText_;
+        pollResult.statusMessage = std::string("已连接硬件[") + getConnectionModeText(connectionMode_) +
+            "]: " + currentPortNameText_;
         return pollResult;
+    }
+
+    // 周期设备扫描：硬件拔出时自动断开重连
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(currentTimePoint - lastDeviceScanTimePoint_).count() >= deviceScanIntervalMs) {
+        lastDeviceScanTimePoint_ = currentTimePoint;
+        const wchar_t* const* activeHardwareIdList = nullptr;
+        std::size_t activeHardwareIdCount = 0;
+        getActiveHardwareIdList(connectionMode_, activeHardwareIdList, activeHardwareIdCount);
+        const std::wstring matchedPortName = findMatchedPortName(activeHardwareIdList, activeHardwareIdCount);
+        if (matchedPortName.empty() || toUtf8String(matchedPortName) != currentPortNameText_) {
+            closePort();
+            pollResult.hasStatusMessage = true;
+            pollResult.statusMessage = std::string("串口已断开[") + getConnectionModeText(connectionMode_) + "]，正在重连...";
+            std::this_thread::sleep_for(std::chrono::milliseconds(reconnectDelayMs));
+            return pollResult;
+        }
     }
 
     const ReadFrameResult readResult = tryReadLatestFrame(
@@ -659,7 +714,7 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
     if (readResult == ReadFrameResult::Disconnected) {
         closePort();
         pollResult.hasStatusMessage = true;
-        pollResult.statusMessage = "串口已断开，正在重连...";
+        pollResult.statusMessage = std::string("串口已断开[") + getConnectionModeText(connectionMode_) + "]，正在重连...";
         std::this_thread::sleep_for(std::chrono::milliseconds(reconnectDelayMs));
         return pollResult;
     }
@@ -680,7 +735,7 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
         std::chrono::duration_cast<std::chrono::milliseconds>(currentTimePoint - lastNoFrameLogTimePoint_).count() >= noFrameLogIntervalMs) {
         std::ostringstream logStream;
         logStream
-            << "串口状态: " << currentPortNameText_
+            << "串口状态[" << getConnectionModeText(connectionMode_) << "]: " << currentPortNameText_
             << " 已连接，但已连续 "
             << std::chrono::duration_cast<std::chrono::milliseconds>(currentTimePoint - lastValidFrameTimePoint_).count()
             << "ms 未收到有效帧，缓存字节数=" << receiveBuffer_.size();
@@ -693,7 +748,13 @@ SerialPollResult SerialFrameReceiver::poll(std::array<int16_t, kChannelCount>& l
 }
 
 std::string SerialFrameReceiver::getTargetHardwareIdText() const {
-    return toUtf8String(hardwareIdText);
+    const wchar_t* const* activeHardwareIdList = nullptr;
+    std::size_t activeHardwareIdCount = 0;
+    getActiveHardwareIdList(connectionMode_, activeHardwareIdList, activeHardwareIdCount);
+    if (activeHardwareIdCount > 0) {
+        return toUtf8String(activeHardwareIdList[0]);
+    }
+    return "";
 }
 
 }  // namespace handdemo

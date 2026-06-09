@@ -1,4 +1,6 @@
-﻿#include "hand_algorithm.h"
+﻿// Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
+
+#include "hand_algorithm.h"
 
 #include <algorithm>
 #include <cmath>
@@ -24,8 +26,7 @@ int toChannelArrayIndex(int channelIndex) {
 }
 
 double calcChRatio(double currentValue, double startValue, double endValue) {
-    // 对齐 Python calcChRatio：
-    // Closed 是 0 比例基线，Fist/Spread 是 1 比例上限。
+    // Closed 为 0 比例基线，Fist/Spread 为 1 比例上限。
     if (endValue <= startValue + 1.0) {
         return 0.0;
     }
@@ -71,8 +72,7 @@ double getSmoothstepRatio(double startRatio, double endRatio, double value) {
 }
 
 double buildEffectiveSpreadAngle(double spreadRatio, double adjacentRootFlexRatio, const SpreadPairConfig& spreadConfig) {
-    // 对齐 Python getPairDisplayAngle + buildEffectiveSpreadRatioByPairName：
-    // 展开角 = openRootAngle * ratio * suppress，不再使用旧版 angleScale。
+    // 展开角 = openRootAngle * ratio * suppress。
     const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle;
     const double suppressRatio = getSmoothstepRatio(
         kFoldSpreadSuppressStartRatio,
@@ -99,10 +99,12 @@ bool HandAngleAlgorithm::setRuntimeConfig(const RuntimeConfig& runtimeConfig) {
         !isValidThumbInwardGateChannel(runtimeConfig.thumbInwardGateChannel) ||
         !std::isfinite(runtimeConfig.thumbGateDeadbandRatio) ||
         !std::isfinite(runtimeConfig.spreadDeadbandRatio) ||
+        !std::isfinite(runtimeConfig.crosstalkMaxAbsIntercept) ||
         runtimeConfig.thumbGateDeadbandRatio < 0.0 ||
         runtimeConfig.thumbGateDeadbandRatio > 1.0 ||
         runtimeConfig.spreadDeadbandRatio < 0.0 ||
-        runtimeConfig.spreadDeadbandRatio > 1.0) {
+        runtimeConfig.spreadDeadbandRatio > 1.0 ||
+        runtimeConfig.crosstalkMaxAbsIntercept < 0.0) {
         return false;
     }
 
@@ -132,6 +134,7 @@ void HandAngleAlgorithm::resetFilterState() {
     }
     thumbGateStableState_ = {};
     thumbGateFilterDeque_.clear();
+    thumbInwardAmplitudeStable_ = {};
 }
 
 void HandAngleAlgorithm::reset() {
@@ -144,6 +147,7 @@ void HandAngleAlgorithm::reset() {
     openCalib_.fill(0.0);
     xtalkCoef_.fill({});
     xtalkBase_.fill(0.0);
+    xtalkUnstableChList_.clear();
     resetSamplingState();
     resetFilterState();
 }
@@ -330,8 +334,7 @@ double HandAngleAlgorithm::stabilizeRatio(RatioState& stableState, double ratioV
 }
 
 bool HandAngleAlgorithm::isChannelValidForStage(int channelIndex, CalibrationStage stage) const {
-    // 对齐 Python getInvalidChannelReason / getInvalidChannelType：
-    // stageDelta <= 0 → noPositiveSpan，stageDelta < threshold → smallSpan，均为无效。
+    // stageDelta <= 0 或 stageDelta < kInvalidChannelSpanThresholdValue 时通道无效。
     if (!hasClosed_) {
         return true;  // 无闭合基准时不做无效判定
     }
@@ -400,6 +403,10 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
     if (!hasClosed_ || !hasFist_) {
         return 0.0;
     }
+    // 先判定门控通道在 fist 阶段是否有效
+    if (!isChannelValidForStage(runtimeConfig_.thumbInwardGateChannel, CalibrationStage::Fist)) {
+        return 0.0;
+    }
     // 第一层：AD 值 → 原始门控比例 [0, 1]
     // 门控通道可通过运行时配置覆盖，默认来自 config.h。
     double rawRatio = calcChRatio(
@@ -407,7 +414,7 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
         closedCalib_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
         fistCalib_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)]);
 
-    // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
+    // 第二层：对门控比例做独立移动平均滤波
     thumbGateFilterDeque_.push_back(rawRatio);
     if (thumbGateFilterDeque_.size() > runtimeConfig_.thumbGateFilterWindowSize) {
         thumbGateFilterDeque_.pop_front();
@@ -418,11 +425,27 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
     }
     filteredRatio /= static_cast<double>(thumbGateFilterDeque_.size());
 
-    // 第三层：死区稳定（对齐 Python stabilizeRatio）
+    // 第三层：死区稳定
     filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, runtimeConfig_.thumbGateDeadbandRatio);
 
     // 第四层：smoothstep 重新映射 [startRatio, endRatio] → [0, 1]
     return getSmoothstepRatio(kThumbFlexGateStartRatio, kThumbFlexGateEndRatio, filteredRatio);
+}
+
+double HandAngleAlgorithm::getThumbInwardAmplitudeRatio(const std::array<double, kChannelCount>& channelValueList) {
+    // CH16 内收幅度，使用独立稳定状态，死区使用 spreadDeadbandRatio。
+    constexpr int thumbSpreadChannel = 16;
+    if (!hasClosed_ || !hasFist_) {
+        return 0.0;
+    }
+    if (!isChannelValidForStage(thumbSpreadChannel, CalibrationStage::Fist)) {
+        return 0.0;
+    }
+    double ratioValue = calcChRatio(
+        channelValueList[toChannelArrayIndex(thumbSpreadChannel)],
+        closedCalib_[toChannelArrayIndex(thumbSpreadChannel)],
+        fistCalib_[toChannelArrayIndex(thumbSpreadChannel)]);
+    return stabilizeRatio(thumbInwardAmplitudeStable_, ratioValue, runtimeConfig_.spreadDeadbandRatio);
 }
 
 void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue) {
@@ -533,7 +556,7 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
     // 拇指展开（有符号，正=外展，负=内收）
     double spreadRatio16 = getSpreadRatio(16, channelValueList[toChannelArrayIndex(16)]);
     double gateRatio = getThumbGateRatio(channelValueList);
-    double amplitudeRatio = getFlexRatio(16, channelValueList[toChannelArrayIndex(16)]);
+    double amplitudeRatio = getThumbInwardAmplitudeRatio(channelValueList);
     double outwardRatio = spreadRatio16 * (1.0 - gateRatio);
     double inwardRatio = amplitudeRatio * gateRatio;
     outputValue.thumb[2] = convertAngleToFloat(
@@ -551,7 +574,7 @@ bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], Han
     }
 
     rawFilter_.filteredValueList = filterFrm(adValues);
-    // 实时串扰补偿：在滤波后、ratio 计算前扣除预测串扰，对齐 Python buildMotionState。
+    // 实时串扰补偿：在滤波后、ratio 计算前扣除预测串扰。
     const auto correctedValueList = applyXtalk(rawFilter_.filteredValueList);
     buildOutputValue(correctedValueList, outputValue);
     return true;
@@ -561,9 +584,7 @@ bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], Han
 
 namespace {
 
-// solveLinearSystem: 高斯消元求解 Ax = b，对齐 Python solveLinearSystem。
-// augmentedMatrix: [A | b]，sizeValue 阶方阵 + 一列右端项。
-// 返回解向量，奇异矩阵返回空 vector。
+// 高斯消元求解 Ax = b，增广矩阵 [A | b]，返回解向量，奇异矩阵返回空 vector。
 std::vector<double> solveLinearSystem(std::vector<std::vector<double>> augmentedMatrix, std::size_t sizeValue) {
     // 部分选主元（列主元）+ Gauss-Jordan 消元
     for (std::size_t pivotIndex = 0; pivotIndex < sizeValue; ++pivotIndex) {
@@ -616,7 +637,6 @@ std::vector<double> solveLinearSystem(std::vector<std::vector<double>> augmented
 
 std::array<double, kChannelCount> HandAngleAlgorithm::applyXtalk(
     const std::array<double, kChannelCount>& channelValueList) const {
-    // 对齐 Python applyCrosstalkCompensationToChannelValueList
     if (!hasXtalk_) {
         return channelValueList;
     }
@@ -648,12 +668,12 @@ std::array<double, kChannelCount> HandAngleAlgorithm::applyXtalk(
 XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
     const std::deque<std::array<double, kChannelCount>>& frameList,
     int targetChannelIndex) const {
-    // 对齐 Python fitCrosstalkCoefficientForTargetChannel：
-    // ΔP = aΔT1 + bΔT2 + cΔT3 + d，最小二乘拟合。
+    // 最小二乘拟合 ΔP = aΔT1 + bΔT2 + cΔT3 + d。
     XtalkCoef zeroCoef;
 
     const std::size_t driverCount = kCrosstalkDriverChannelList.size();
-    const std::size_t featureCount = driverCount + (kCrosstalkFitIntercept ? 1U : 0U);
+    const bool fitIntercept = runtimeConfig_.crosstalkFitIntercept;
+    const std::size_t featureCount = driverCount + (fitIntercept ? 1U : 0U);
     if (featureCount == 0 || frameList.size() < featureCount) {
         return zeroCoef;
     }
@@ -673,7 +693,7 @@ XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
             const int driverArrayIndex = toChannelArrayIndex(driverChannelIndex);
             featureValueList.push_back(frameValueList[driverArrayIndex] - baselineValueList[driverArrayIndex]);
         }
-        if (kCrosstalkFitIntercept) {
+        if (fitIntercept) {
             featureValueList.push_back(1.0);
         }
 
@@ -714,12 +734,8 @@ XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
         }
     }
 
-    if (kCrosstalkFitIntercept) {
+    if (fitIntercept) {
         coef.d = solutionList.back();
-        // 对齐 Python：|d| 超限不阻止使用，仅记录
-        if (std::abs(coef.d) > kCrosstalkMaxAbsIntercept) {
-            // 截距过大，系数仍标记为有效（Python 行为一致）
-        }
     }
 
     return coef;
@@ -727,7 +743,8 @@ XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
 
 void HandAngleAlgorithm::fitXtalkCoefs(
     const std::deque<std::array<double, kChannelCount>>& frameList) {
-    // 对齐 Python buildCrosstalkCoefficientByTargetChannel
+    xtalkUnstableChList_.clear();
+
     if (frameList.empty()) {
         return;
     }
@@ -736,9 +753,19 @@ void HandAngleAlgorithm::fitXtalkCoefs(
         if (targetChannelIndex == kCrosstalkExcludedChannel) {
             continue;
         }
-        xtalkCoef_[toChannelArrayIndex(targetChannelIndex)] =
-            fitXtalkCoefForChannel(frameList, targetChannelIndex);
+        XtalkCoef coef = fitXtalkCoefForChannel(frameList, targetChannelIndex);
+        xtalkCoef_[toChannelArrayIndex(targetChannelIndex)] = coef;
+
+        // 记录 |d| 超限的异常通道
+        if (coef.isValid && runtimeConfig_.crosstalkFitIntercept &&
+            std::abs(coef.d) > runtimeConfig_.crosstalkMaxAbsIntercept) {
+            xtalkUnstableChList_.push_back(targetChannelIndex);
+        }
     }
+}
+
+std::vector<int> HandAngleAlgorithm::getXtalkUnstableChList() const {
+    return xtalkUnstableChList_;
 }
 
 }  // namespace handdemo
