@@ -1,5 +1,7 @@
 # handDemo — 手部数据手套 C++ 算法 SDK
 
+> Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
+
 ## 概述
 
 本项目是手部数据手套的纯算法 C++ SDK，负责将 19 路 AD 传感器原始值转换为五指关节角度输出。可打包为 DLL 供客户集成。
