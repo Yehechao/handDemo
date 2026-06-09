@@ -20,7 +20,6 @@ cd build && cmake .. && cmake --build . --config Release
 # 打开 handDemo.sln → 项目 MatrixHand，工具集 v143，C++17
 ```
 
-- Debug 链接 `opencv_world480d.lib`，Release 链接 `opencv_world480.lib`
 - 额外链接 `Setupapi.lib`、`Advapi32.lib`
 - 编译选项 `/utf-8`
 - 所有 C++ 源码保存为 **UTF-8 with BOM**
@@ -54,17 +53,21 @@ beginCalibration(Closed) → pushCalibrationFrame × N → finishCalibration()
 
 ## SDK 公开 API
 
-| 方法 | 说明 |
+对外接口定义于 `matrix_hand_sdk.h`，使用 C 风格接口，不暴露 C++ 类型。
+
+| 函数 | 说明 |
 |------|------|
-| `setRuntimeConfig(config)` | 覆盖默认参数（在校准前调用） |
-| `beginCalibration(stage)` | 开始某阶段校准 |
-| `pushCalibrationFrame(ad)`  | 推入一帧 AD 数据 |
-| `finishCalibration()` | 结束当前阶段校准 |
-| `isReady()` | 三步校准是否完成 |
-| `processFrame(ad, output)` | 实时计算角度 |
-| `reset()` | 清空全部状态 |
-| `getCurrentAd(filtered)` | 获取当前帧 AD 值，true=滤波后，false=原始 |
-| `getXtalkUnstableChList()` | 获取串扰 d 异常通道列表 |
+| `matrix_hand_create()` | 创建 SDK 实例 |
+| `matrix_hand_destroy(handle)` | 销毁实例 |
+| `matrix_hand_reset(handle)` | 清空校准与滤波状态 |
+| `matrix_hand_set_config(handle, config)` | 设置运行时参数（校准前调用） |
+| `matrix_hand_begin_calibration(handle, stage)` | 开始某阶段校准 |
+| `matrix_hand_push_calibration_frame(handle, ad)` | 推入一帧 AD 采样 |
+| `matrix_hand_finish_calibration(handle, result)` | 结束校准并获取质量结果 |
+| `matrix_hand_is_ready(handle, ready)` | 查询三步校准是否完成 |
+| `matrix_hand_process_frame(handle, ad, output)` | 实时计算角度 |
+| `matrix_hand_get_current_ad(handle, filtered, ad)` | 获取当前帧 AD 值 |
+| `matrix_hand_status_text(status)` | 错误码转可读文本 |
 
 ## 核心类
 
@@ -107,7 +110,7 @@ beginCalibration(Closed) → pushCalibrationFrame × N → finishCalibration()
 
 ## Python 参考
 
-Python 参考实现位于 `D:/yhc_code/handDemo_py`。C++ 算法与其纯算法部分功能一致（不含 UI、动画、3D 骨架、MANO）。
+Python 参考实现位于 `D:/yhc_code/handDemo_py`。C++ 算法 SDK 与其纯算法部分功能一致（不含 UI、动画、3D 骨架、MANO 等模块）。
 
 ## 编码约定
 

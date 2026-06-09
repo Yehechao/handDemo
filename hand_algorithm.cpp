@@ -143,6 +143,7 @@ void HandAngleAlgorithm::reset() {
     hasFist_ = false;
     hasOpen_ = false;
     hasXtalk_ = false;
+    xtalkValidTargetChannelCount_ = 0;
     closedCalib_.fill(0.0);
     fistCalib_.fill(0.0);
     openCalib_.fill(0.0);
@@ -220,12 +221,6 @@ void HandAngleAlgorithm::setStageCalib(
         return;
     }
 
-    if (!hasClosed_) {
-        fistCalib_ = averageValueList;
-        hasFist_ = true;
-        return;
-    }
-
     if (stage == CalibrationStage::Fist) {
         auto targetValueList = stageCalibTpl(CalibrationStage::Fist);
         if (!hasFist_) {
@@ -260,7 +255,17 @@ bool HandAngleAlgorithm::finishCalibration() {
     }
 
     if (samplingState_.stage == CalibrationStage::Crosstalk) {
-        fitXtalkCoefs(samplingState_.frameValueList);
+        // Crosstalk 必须在三步校准完成后才能进行
+        if (!isReady()) {
+            resetSamplingState();
+            return false;
+        }
+        xtalkValidTargetChannelCount_ = fitXtalkCoefs(samplingState_.frameValueList);
+        if (xtalkValidTargetChannelCount_ == 0) {
+            hasXtalk_ = false;
+            resetSamplingState();
+            return false;
+        }
         hasXtalk_ = true;
         // 保存基线（第一帧）供实时补偿使用
         if (!samplingState_.frameValueList.empty()) {
@@ -268,6 +273,16 @@ bool HandAngleAlgorithm::finishCalibration() {
         }
         resetSamplingState();
         return true;
+    }
+
+    // 非 Crosstalk 阶段的前置检查
+    if (samplingState_.stage == CalibrationStage::Fist && !hasClosed_) {
+        resetSamplingState();
+        return false;
+    }
+    if (samplingState_.stage == CalibrationStage::Spread && (!hasClosed_ || !hasFist_)) {
+        resetSamplingState();
+        return false;
     }
 
     const auto averageValueList = avgCalibFrm();
@@ -767,12 +782,13 @@ XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
     return coef;
 }
 
-void HandAngleAlgorithm::fitXtalkCoefs(
+std::size_t HandAngleAlgorithm::fitXtalkCoefs(
     const std::deque<std::array<double, kChannelCount>>& frameList) {
     xtalkUnstableChList_.clear();
+    std::size_t validCount = 0;
 
     if (frameList.empty()) {
-        return;
+        return 0;
     }
 
     for (int targetChannelIndex : kCrosstalkTargetChannelList) {
@@ -782,16 +798,26 @@ void HandAngleAlgorithm::fitXtalkCoefs(
         XtalkCoef coef = fitXtalkCoefForChannel(frameList, targetChannelIndex);
         xtalkCoef_[toChannelArrayIndex(targetChannelIndex)] = coef;
 
+        if (coef.isValid) {
+            ++validCount;
+        }
+
         // 记录 |d| 超限的异常通道
         if (coef.isValid && runtimeConfig_.crosstalkFitIntercept &&
             std::abs(coef.d) > runtimeConfig_.crosstalkMaxAbsIntercept) {
             xtalkUnstableChList_.push_back(targetChannelIndex);
         }
     }
+
+    return validCount;
 }
 
 std::vector<int> HandAngleAlgorithm::getXtalkUnstableChList() const {
     return xtalkUnstableChList_;
+}
+
+std::size_t HandAngleAlgorithm::getXtalkValidTargetChannelCount() const {
+    return xtalkValidTargetChannelCount_;
 }
 
 }  // namespace handdemo

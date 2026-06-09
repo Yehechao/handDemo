@@ -66,6 +66,8 @@ public:
     std::array<double, kChannelCount> getCurrentAd(bool filtered = true) const;
     // getXtalkUnstableChList: 返回串扰校准后 |d| 超限的异常通道列表（1-based CH 编号），客户可据此判断校准稳定性
     std::vector<int> getXtalkUnstableChList() const;
+    // getXtalkValidTargetChannelCount: 返回串扰拟合成功的有效通道数，为 0 表示串扰校准失败
+    std::size_t getXtalkValidTargetChannelCount() const;
 
 private:
     struct SampleState {
@@ -107,8 +109,8 @@ private:
     double getThumbInwardAmplitudeRatio(const std::array<double, kChannelCount>& channelValueList);
     bool isChannelValidForStage(int channelIndex, CalibrationStage stage) const;
 
-    // 串扰补偿
-    void fitXtalkCoefs(const std::deque<std::array<double, kChannelCount>>& frameList);
+    // 串扰补偿，返回有效拟合通道数
+    std::size_t fitXtalkCoefs(const std::deque<std::array<double, kChannelCount>>& frameList);
     XtalkCoef fitXtalkCoefForChannel(const std::deque<std::array<double, kChannelCount>>& frameList, int channelIndex) const;
     std::array<double, kChannelCount> applyXtalk(const std::array<double, kChannelCount>& channelValueList) const;
 
@@ -133,6 +135,7 @@ private:
     std::array<XtalkCoef, kChannelCount> xtalkCoef_{};
     std::array<double, kChannelCount> xtalkBase_{};
     bool hasXtalk_ = false;
+    std::size_t xtalkValidTargetChannelCount_ = 0;
     std::vector<int> xtalkUnstableChList_{};
 };
 
