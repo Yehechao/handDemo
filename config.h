@@ -32,7 +32,7 @@ constexpr std::size_t kMeanFilterWindowFrameCount = 10;
 // 拇指门控比例独立滤波窗口大小。
 constexpr std::size_t kThumbGateFilterWindowSize = 10;
 // 弯曲 ratio 的死区。
-constexpr double kFlexDeadbandRatio = 0.015;
+constexpr double kFlexDeadbandRatio = 0.0;
 
 // 校准阶段目标值相对闭合值的正向变化小于该阈值时，判定该通道无效并按 0 度处理。
 constexpr double kInvalidChannelSpanThresholdValue = 10.0;
