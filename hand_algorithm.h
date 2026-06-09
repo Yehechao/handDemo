@@ -13,6 +13,7 @@ enum class CalibrationStage : int32_t {
     Closed = 0,
     Fist = 1,
     Spread = 2,
+    Crosstalk = 3,
 };
 
 struct HandAngleOutput {
@@ -31,6 +32,15 @@ struct RuntimeConfig {
     double spreadDeadbandRatio = kSpreadDeadbandRatio;
 };
 
+// XtalkCoef: 单通道串扰补偿系数，ΔP = aΔT1 + bΔT2 + cΔT3 + d。
+struct XtalkCoef {
+    double a = 0.0;
+    double b = 0.0;
+    double c = 0.0;
+    double d = 0.0;
+    bool isValid = false;
+};
+
 class HandAngleAlgorithm {
 public:
     HandAngleAlgorithm();
@@ -42,25 +52,27 @@ public:
     void beginCalibration(CalibrationStage stage);
     bool pushCalibrationFrame(const int16_t adValues[kChannelCount]);
     bool finishCalibration();
-    // isReady: 三步校准（Closed/Fist/Spread）都完成后返回 true
+    // isReady: Closed/Fist/Spread 三步校准都完成后返回 true（Crosstalk 可选，不阻塞）
     bool isReady() const;
     // processFrame: 传入一帧 AD 数据并输出弯曲角结构体，未完成校准时返回 false
     bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
 
 private:
-    struct SamplingState {
+    struct SampleState {
         bool isActive = false;
         CalibrationStage stage = CalibrationStage::Closed;
         std::array<double, kChannelCount> sumValueList{};
         std::size_t frameCount = 0;
+        // frameValueList: 仅 Crosstalk 阶段使用，保存完整帧序列供最小二乘拟合
+        std::deque<std::array<double, kChannelCount>> frameValueList;
     };
 
-    struct RatioStableState {
+    struct RatioState {
         bool isInitialized = false;
         double stableRatio = 0.0;
     };
 
-    struct RawFilterState {
+    struct FilterState {
         std::array<double, kChannelCount> filteredValueList{};
         std::array<double, kChannelCount> sumValueList{};
         std::deque<std::array<double, kChannelCount>> frameWindowList;
@@ -69,34 +81,45 @@ private:
     void resetFilterState();
     void resetSamplingState();
 
-    std::array<double, kChannelCount> buildAverageCalibrationFrame() const;
-    std::array<double, kChannelCount> buildStageCalibrationTemplate(CalibrationStage stage) const;
-    void applyStageCalibrationValue(CalibrationStage stage, const std::array<double, kChannelCount>& averageValueList);
+    std::array<double, kChannelCount> avgCalibFrm() const;
+    std::array<double, kChannelCount> stageCalibTpl(CalibrationStage stage) const;
+    void setStageCalib(CalibrationStage stage, const std::array<double, kChannelCount>& averageValueList);
 
-    std::array<double, kChannelCount> filterFrameValueList(const int16_t adValues[kChannelCount]);
-    std::array<double, kChannelCount> getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]);
+    std::array<double, kChannelCount> filterFrm(const int16_t adValues[kChannelCount]);
+    std::array<double, kChannelCount> meanFilteredFrm(const int16_t adValues[kChannelCount]);
 
     double getFlexRatio(int channelIndex, double currentValue);
     void buildOutputValue(const std::array<double, kChannelCount>& channelValueList, HandAngleOutput& outputValue);
 
-    double stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio);
+    double stabilizeRatio(RatioState& stableState, double ratioValue, double deadbandRatio);
     double getSpreadRatio(int channelIndex, double currentValue);
     double getThumbGateRatio(const std::array<double, kChannelCount>& channelValueList);
+    bool isChannelValidForStage(int channelIndex, CalibrationStage stage) const;
 
-    std::array<double, kChannelCount> closedCalibrationValueList_{};
-    std::array<double, kChannelCount> fistCalibrationValueList_{};
-    std::array<double, kChannelCount> spreadCalibrationValueList_{};
-    bool hasClosedCalibration_ = false;
-    bool hasFistCalibration_ = false;
-    bool hasSpreadCalibration_ = false;
+    // 串扰补偿
+    void fitXtalkCoefs(const std::deque<std::array<double, kChannelCount>>& frameList);
+    XtalkCoef fitXtalkCoefForChannel(const std::deque<std::array<double, kChannelCount>>& frameList, int channelIndex) const;
+    std::array<double, kChannelCount> applyXtalk(const std::array<double, kChannelCount>& channelValueList) const;
+
+    std::array<double, kChannelCount> closedCalib_{};
+    std::array<double, kChannelCount> fistCalib_{};
+    std::array<double, kChannelCount> openCalib_{};
+    bool hasClosed_ = false;
+    bool hasFist_ = false;
+    bool hasOpen_ = false;
 
     RuntimeConfig runtimeConfig_{};
-    SamplingState samplingState_{};
-    RawFilterState rawFilterState_{};
-    std::array<RatioStableState, kChannelCount> flexStableStateByChannel_{};
-    std::array<RatioStableState, kChannelCount> spreadStableStateByChannel_{};
-    RatioStableState thumbGateStableState_{};
+    SampleState samplingState_{};
+    FilterState rawFilter_{};
+    std::array<RatioState, kChannelCount> flexStable_{};
+    std::array<RatioState, kChannelCount> spreadStable_{};
+    RatioState thumbGateStableState_{};
     std::deque<double> thumbGateFilterDeque_{};
+
+    // 串扰补偿
+    std::array<XtalkCoef, kChannelCount> xtalkCoef_{};
+    std::array<double, kChannelCount> xtalkBase_{};
+    bool hasXtalk_ = false;
 };
 
 }  

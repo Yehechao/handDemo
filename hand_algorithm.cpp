@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace handdemo {
 
@@ -22,8 +23,8 @@ int toChannelArrayIndex(int channelIndex) {
     return channelIndex - 1;
 }
 
-double calculateChannelRatio(double currentValue, double startValue, double endValue) {
-    // 对齐 Python calculateChannelRatio：
+double calcChRatio(double currentValue, double startValue, double endValue) {
+    // 对齐 Python calcChRatio：
     // Closed 是 0 比例基线，Fist/Spread 是 1 比例上限。
     if (endValue <= startValue + 1.0) {
         return 0.0;
@@ -70,7 +71,9 @@ double getSmoothstepRatio(double startRatio, double endRatio, double value) {
 }
 
 double buildEffectiveSpreadAngle(double spreadRatio, double adjacentRootFlexRatio, const SpreadPairConfig& spreadConfig) {
-    const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle * spreadConfig.angleScale;
+    // 对齐 Python getPairDisplayAngle + buildEffectiveSpreadRatioByPairName：
+    // 展开角 = openRootAngle * ratio * suppress，不再使用旧版 angleScale。
+    const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle;
     const double suppressRatio = getSmoothstepRatio(
         kFoldSpreadSuppressStartRatio,
         kFoldSpreadSuppressEndRatio,
@@ -113,17 +116,18 @@ void HandAngleAlgorithm::resetSamplingState() {
     samplingState_.stage = CalibrationStage::Closed;
     samplingState_.sumValueList.fill(0.0);
     samplingState_.frameCount = 0;
+    samplingState_.frameValueList.clear();
 }
 
 void HandAngleAlgorithm::resetFilterState() {
-    rawFilterState_.filteredValueList.fill(0.0);
-    rawFilterState_.sumValueList.fill(0.0);
-    rawFilterState_.frameWindowList.clear();
+    rawFilter_.filteredValueList.fill(0.0);
+    rawFilter_.sumValueList.fill(0.0);
+    rawFilter_.frameWindowList.clear();
 
-    for (auto& stableState : flexStableStateByChannel_) {
+    for (auto& stableState : flexStable_) {
         stableState = {};
     }
-    for (auto& stableState : spreadStableStateByChannel_) {
+    for (auto& stableState : spreadStable_) {
         stableState = {};
     }
     thumbGateStableState_ = {};
@@ -131,12 +135,15 @@ void HandAngleAlgorithm::resetFilterState() {
 }
 
 void HandAngleAlgorithm::reset() {
-    hasClosedCalibration_ = false;
-    hasFistCalibration_ = false;
-    hasSpreadCalibration_ = false;
-    closedCalibrationValueList_.fill(0.0);
-    fistCalibrationValueList_.fill(0.0);
-    spreadCalibrationValueList_.fill(0.0);
+    hasClosed_ = false;
+    hasFist_ = false;
+    hasOpen_ = false;
+    hasXtalk_ = false;
+    closedCalib_.fill(0.0);
+    fistCalib_.fill(0.0);
+    openCalib_.fill(0.0);
+    xtalkCoef_.fill({});
+    xtalkBase_.fill(0.0);
     resetSamplingState();
     resetFilterState();
 }
@@ -155,6 +162,15 @@ bool HandAngleAlgorithm::pushCalibrationFrame(const int16_t adValues[kChannelCou
         return true;
     }
 
+    // Crosstalk 阶段：保存完整帧序列供最小二乘拟合
+    if (samplingState_.stage == CalibrationStage::Crosstalk) {
+        std::array<double, kChannelCount> frameCopy{};
+        for (std::size_t i = 0; i < kChannelCount; ++i) {
+            frameCopy[i] = static_cast<double>(adValues[i]);
+        }
+        samplingState_.frameValueList.push_back(frameCopy);
+    }
+
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
         samplingState_.sumValueList[channelIndex] += static_cast<double>(adValues[channelIndex]);
     }
@@ -162,7 +178,7 @@ bool HandAngleAlgorithm::pushCalibrationFrame(const int16_t adValues[kChannelCou
     return true;
 }
 
-std::array<double, kChannelCount> HandAngleAlgorithm::buildAverageCalibrationFrame() const {
+std::array<double, kChannelCount> HandAngleAlgorithm::avgCalibFrm() const {
     std::array<double, kChannelCount> averageValueList{};
     averageValueList.fill(0.0);
     if (samplingState_.frameCount == 0) {
@@ -174,15 +190,15 @@ std::array<double, kChannelCount> HandAngleAlgorithm::buildAverageCalibrationFra
     return averageValueList;
 }
 
-std::array<double, kChannelCount> HandAngleAlgorithm::buildStageCalibrationTemplate(CalibrationStage stage) const {
-    if (stage == CalibrationStage::Fist && hasFistCalibration_) {
-        return fistCalibrationValueList_;
+std::array<double, kChannelCount> HandAngleAlgorithm::stageCalibTpl(CalibrationStage stage) const {
+    if (stage == CalibrationStage::Fist && hasFist_) {
+        return fistCalib_;
     }
-    if (stage == CalibrationStage::Spread && hasSpreadCalibration_) {
-        return spreadCalibrationValueList_;
+    if (stage == CalibrationStage::Spread && hasOpen_) {
+        return openCalib_;
     }
-    if (hasClosedCalibration_) {
-        return closedCalibrationValueList_;
+    if (hasClosed_) {
+        return closedCalib_;
     }
 
     std::array<double, kChannelCount> emptyValueList{};
@@ -190,25 +206,25 @@ std::array<double, kChannelCount> HandAngleAlgorithm::buildStageCalibrationTempl
     return emptyValueList;
 }
 
-void HandAngleAlgorithm::applyStageCalibrationValue(
+void HandAngleAlgorithm::setStageCalib(
     CalibrationStage stage,
     const std::array<double, kChannelCount>& averageValueList) {
     if (stage == CalibrationStage::Closed) {
-        closedCalibrationValueList_ = averageValueList;
-        hasClosedCalibration_ = true;
+        closedCalib_ = averageValueList;
+        hasClosed_ = true;
         return;
     }
 
-    if (!hasClosedCalibration_) {
-        fistCalibrationValueList_ = averageValueList;
-        hasFistCalibration_ = true;
+    if (!hasClosed_) {
+        fistCalib_ = averageValueList;
+        hasFist_ = true;
         return;
     }
 
     if (stage == CalibrationStage::Fist) {
-        auto targetValueList = buildStageCalibrationTemplate(CalibrationStage::Fist);
-        if (!hasFistCalibration_) {
-            targetValueList = closedCalibrationValueList_;
+        auto targetValueList = stageCalibTpl(CalibrationStage::Fist);
+        if (!hasFist_) {
+            targetValueList = closedCalib_;
         }
         for (int channelIndex : kFlexChannelIndexList) {
             targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
@@ -218,18 +234,18 @@ void HandAngleAlgorithm::applyStageCalibrationValue(
             targetValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)] =
                 averageValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)];
         }
-        fistCalibrationValueList_ = targetValueList;
-        hasFistCalibration_ = true;
+        fistCalib_ = targetValueList;
+        hasFist_ = true;
         return;
     }
 
     // Spread: 以 fist 模板为基底，仅覆盖展开通道
-    auto targetValueList = buildStageCalibrationTemplate(CalibrationStage::Fist);
+    auto targetValueList = stageCalibTpl(CalibrationStage::Fist);
     for (int channelIndex : kSpreadChannelIndexList) {
         targetValueList[toChannelArrayIndex(channelIndex)] = averageValueList[toChannelArrayIndex(channelIndex)];
     }
-    spreadCalibrationValueList_ = targetValueList;
-    hasSpreadCalibration_ = true;
+    openCalib_ = targetValueList;
+    hasOpen_ = true;
 }
 
 bool HandAngleAlgorithm::finishCalibration() {
@@ -238,53 +254,64 @@ bool HandAngleAlgorithm::finishCalibration() {
         return false;
     }
 
-    const auto averageValueList = buildAverageCalibrationFrame();
-    applyStageCalibrationValue(samplingState_.stage, averageValueList);
+    if (samplingState_.stage == CalibrationStage::Crosstalk) {
+        fitXtalkCoefs(samplingState_.frameValueList);
+        hasXtalk_ = true;
+        // 保存基线（第一帧）供实时补偿使用
+        if (!samplingState_.frameValueList.empty()) {
+            xtalkBase_ = samplingState_.frameValueList.front();
+        }
+        resetSamplingState();
+        return true;
+    }
+
+    const auto averageValueList = avgCalibFrm();
+    setStageCalib(samplingState_.stage, averageValueList);
     resetSamplingState();
     return true;
 }
 
 bool HandAngleAlgorithm::isReady() const {
-    return hasClosedCalibration_ && hasFistCalibration_ && hasSpreadCalibration_;
+    return hasClosed_ && hasFist_ && hasOpen_;
 }
 
-std::array<double, kChannelCount> HandAngleAlgorithm::getMeanFilteredFrameValueList(const int16_t adValues[kChannelCount]) {
+std::array<double, kChannelCount> HandAngleAlgorithm::meanFilteredFrm(const int16_t adValues[kChannelCount]) {
     std::array<double, kChannelCount> currentFrameValueList{};
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
         currentFrameValueList[channelIndex] = static_cast<double>(adValues[channelIndex]);
     }
 
-    rawFilterState_.frameWindowList.push_back(currentFrameValueList);
+    rawFilter_.frameWindowList.push_back(currentFrameValueList);
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
-        rawFilterState_.sumValueList[channelIndex] += currentFrameValueList[channelIndex];
+        rawFilter_.sumValueList[channelIndex] += currentFrameValueList[channelIndex];
     }
 
-    if (rawFilterState_.frameWindowList.size() > runtimeConfig_.meanFilterWindowFrameCount) {
-        const auto& expiredFrameValueList = rawFilterState_.frameWindowList.front();
+    if (rawFilter_.frameWindowList.size() > runtimeConfig_.meanFilterWindowFrameCount) {
+        const auto& expiredFrameValueList = rawFilter_.frameWindowList.front();
         for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
-            rawFilterState_.sumValueList[channelIndex] -= expiredFrameValueList[channelIndex];
+            rawFilter_.sumValueList[channelIndex] -= expiredFrameValueList[channelIndex];
         }
-        rawFilterState_.frameWindowList.pop_front();
+        rawFilter_.frameWindowList.pop_front();
     }
 
-    const double frameCountValue = static_cast<double>(rawFilterState_.frameWindowList.size());
+    const double frameCountValue = static_cast<double>(rawFilter_.frameWindowList.size());
     if (frameCountValue <= 0.0) {
-        rawFilterState_.filteredValueList = currentFrameValueList;
-        return rawFilterState_.filteredValueList;
+        rawFilter_.filteredValueList = currentFrameValueList;
+        return rawFilter_.filteredValueList;
     }
 
     // 串口输入层不做平滑，算法内部保留可配置帧数的实时均值窗口。
     for (std::size_t channelIndex = 0; channelIndex < kChannelCount; ++channelIndex) {
-        rawFilterState_.filteredValueList[channelIndex] = rawFilterState_.sumValueList[channelIndex] / frameCountValue;
+        rawFilter_.filteredValueList[channelIndex] = rawFilter_.sumValueList[channelIndex] / frameCountValue;
     }
-    return rawFilterState_.filteredValueList;
+    return rawFilter_.filteredValueList;
 }
 
-std::array<double, kChannelCount> HandAngleAlgorithm::filterFrameValueList(const int16_t adValues[kChannelCount]) {
-    return getMeanFilteredFrameValueList(adValues);
+std::array<double, kChannelCount> HandAngleAlgorithm::filterFrm(const int16_t adValues[kChannelCount]) {
+    return meanFilteredFrm(adValues);
 }
 
-double HandAngleAlgorithm::stabilizeRatio(RatioStableState& stableState, double ratioValue, double deadbandRatio) {
+double HandAngleAlgorithm::stabilizeRatio(RatioState& stableState, double ratioValue, double deadbandRatio) {
     const double clampedRatioValue = clampValue(ratioValue, 0.0, 1.0);
     if (!stableState.isInitialized) {
         stableState.isInitialized = true;
@@ -302,46 +329,83 @@ double HandAngleAlgorithm::stabilizeRatio(RatioStableState& stableState, double 
     return stableState.stableRatio;
 }
 
+bool HandAngleAlgorithm::isChannelValidForStage(int channelIndex, CalibrationStage stage) const {
+    // 对齐 Python getInvalidChannelReason / getInvalidChannelType：
+    // stageDelta <= 0 → noPositiveSpan，stageDelta < threshold → smallSpan，均为无效。
+    if (!hasClosed_) {
+        return true;  // 无闭合基准时不做无效判定
+    }
+
+    const int arrayIndex = toChannelArrayIndex(channelIndex);
+    const double closedVal = closedCalib_[arrayIndex];
+
+    double stageVal = 0.0;
+    if (stage == CalibrationStage::Fist && hasFist_) {
+        stageVal = fistCalib_[arrayIndex];
+    } else if (stage == CalibrationStage::Spread && hasOpen_) {
+        stageVal = openCalib_[arrayIndex];
+    } else {
+        return true;
+    }
+
+    const double delta = stageVal - closedVal;
+    if (delta <= 0.0) {
+        return false;
+    }
+    if (delta < kInvalidChannelSpanThresholdValue) {
+        return false;
+    }
+    return true;
+}
+
 double HandAngleAlgorithm::getFlexRatio(int channelIndex, double currentValue) {
-    if (!hasClosedCalibration_ || !hasFistCalibration_) {
+    if (!isChannelValidForStage(channelIndex, CalibrationStage::Fist)) {
         return 0.0;
     }
 
-    double ratioValue = calculateChannelRatio(
+    if (!hasClosed_ || !hasFist_) {
+        return 0.0;
+    }
+
+    double ratioValue = calcChRatio(
         currentValue,
-        closedCalibrationValueList_[toChannelArrayIndex(channelIndex)],
-        fistCalibrationValueList_[toChannelArrayIndex(channelIndex)]);
+        closedCalib_[toChannelArrayIndex(channelIndex)],
+        fistCalib_[toChannelArrayIndex(channelIndex)]);
 
     return stabilizeRatio(
-        flexStableStateByChannel_[toChannelArrayIndex(channelIndex)],
+        flexStable_[toChannelArrayIndex(channelIndex)],
         ratioValue,
         kFlexDeadbandRatio);
 }
 
 double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue) {
-    if (!hasClosedCalibration_ || !hasSpreadCalibration_) {
+    if (!isChannelValidForStage(channelIndex, CalibrationStage::Spread)) {
         return 0.0;
     }
-    double ratioValue = calculateChannelRatio(
+
+    if (!hasClosed_ || !hasOpen_) {
+        return 0.0;
+    }
+    double ratioValue = calcChRatio(
         currentValue,
-        closedCalibrationValueList_[toChannelArrayIndex(channelIndex)],
-        spreadCalibrationValueList_[toChannelArrayIndex(channelIndex)]);
+        closedCalib_[toChannelArrayIndex(channelIndex)],
+        openCalib_[toChannelArrayIndex(channelIndex)]);
     return stabilizeRatio(
-        spreadStableStateByChannel_[toChannelArrayIndex(channelIndex)],
+        spreadStable_[toChannelArrayIndex(channelIndex)],
         ratioValue,
         runtimeConfig_.spreadDeadbandRatio);
 }
 
 double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCount>& channelValueList) {
-    if (!hasClosedCalibration_ || !hasFistCalibration_) {
+    if (!hasClosed_ || !hasFist_) {
         return 0.0;
     }
     // 第一层：AD 值 → 原始门控比例 [0, 1]
     // 门控通道可通过运行时配置覆盖，默认来自 config.h。
-    double rawRatio = calculateChannelRatio(
+    double rawRatio = calcChRatio(
         channelValueList[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
-        closedCalibrationValueList_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
-        fistCalibrationValueList_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)]);
+        closedCalib_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)],
+        fistCalib_[toChannelArrayIndex(runtimeConfig_.thumbInwardGateChannel)]);
 
     // 第二层：对门控比例做独立移动平均滤波（对齐 Python getFilteredDerivedSignalValue）
     thumbGateFilterDeque_.push_back(rawRatio);
@@ -486,9 +550,195 @@ bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], Han
         return false;
     }
 
-    rawFilterState_.filteredValueList = filterFrameValueList(adValues);
-    buildOutputValue(rawFilterState_.filteredValueList, outputValue);
+    rawFilter_.filteredValueList = filterFrm(adValues);
+    // 实时串扰补偿：在滤波后、ratio 计算前扣除预测串扰，对齐 Python buildMotionState。
+    const auto correctedValueList = applyXtalk(rawFilter_.filteredValueList);
+    buildOutputValue(correctedValueList, outputValue);
     return true;
+}
+
+// ==================== 串扰补偿实现 ====================
+
+namespace {
+
+// solveLinearSystem: 高斯消元求解 Ax = b，对齐 Python solveLinearSystem。
+// augmentedMatrix: [A | b]，sizeValue 阶方阵 + 一列右端项。
+// 返回解向量，奇异矩阵返回空 vector。
+std::vector<double> solveLinearSystem(std::vector<std::vector<double>> augmentedMatrix, std::size_t sizeValue) {
+    // 部分选主元（列主元）+ Gauss-Jordan 消元
+    for (std::size_t pivotIndex = 0; pivotIndex < sizeValue; ++pivotIndex) {
+        std::size_t bestRowIndex = pivotIndex;
+        double bestAbsValue = std::abs(augmentedMatrix[pivotIndex][pivotIndex]);
+        for (std::size_t rowIndex = pivotIndex + 1; rowIndex < sizeValue; ++rowIndex) {
+            const double candidateAbsValue = std::abs(augmentedMatrix[rowIndex][pivotIndex]);
+            if (candidateAbsValue > bestAbsValue) {
+                bestAbsValue = candidateAbsValue;
+                bestRowIndex = rowIndex;
+            }
+        }
+
+        if (bestAbsValue <= 1e-9) {
+            return {};
+        }
+
+        if (bestRowIndex != pivotIndex) {
+            std::swap(augmentedMatrix[pivotIndex], augmentedMatrix[bestRowIndex]);
+        }
+
+        const double pivotValue = augmentedMatrix[pivotIndex][pivotIndex];
+        for (std::size_t columnIndex = pivotIndex; columnIndex <= sizeValue; ++columnIndex) {
+            augmentedMatrix[pivotIndex][columnIndex] /= pivotValue;
+        }
+
+        for (std::size_t rowIndex = 0; rowIndex < sizeValue; ++rowIndex) {
+            if (rowIndex == pivotIndex) {
+                continue;
+            }
+            const double factorValue = augmentedMatrix[rowIndex][pivotIndex];
+            if (std::abs(factorValue) <= 1e-12) {
+                continue;
+            }
+            for (std::size_t columnIndex = pivotIndex; columnIndex <= sizeValue; ++columnIndex) {
+                augmentedMatrix[rowIndex][columnIndex] -= factorValue * augmentedMatrix[pivotIndex][columnIndex];
+            }
+        }
+    }
+
+    std::vector<double> solutionList;
+    solutionList.reserve(sizeValue);
+    for (std::size_t rowIndex = 0; rowIndex < sizeValue; ++rowIndex) {
+        solutionList.push_back(augmentedMatrix[rowIndex][sizeValue]);
+    }
+    return solutionList;
+}
+
+}  // namespace
+
+std::array<double, kChannelCount> HandAngleAlgorithm::applyXtalk(
+    const std::array<double, kChannelCount>& channelValueList) const {
+    // 对齐 Python applyCrosstalkCompensationToChannelValueList
+    if (!hasXtalk_) {
+        return channelValueList;
+    }
+
+    auto correctedValueList = channelValueList;
+
+    for (int targetChannelIndex : kCrosstalkTargetChannelList) {
+        const int targetArrayIndex = toChannelArrayIndex(targetChannelIndex);
+        const XtalkCoef& coef = xtalkCoef_[targetArrayIndex];
+        if (!coef.isValid) {
+            continue;
+        }
+
+        // predictedDelta = d + a * ΔT1 + b * ΔT2 + c * ΔT3
+        double predictedDelta = coef.d;
+        // ΔT1: CH17 → array index 16
+        predictedDelta += coef.a * (channelValueList[16] - xtalkBase_[16]);
+        // ΔT2: CH19 → array index 18
+        predictedDelta += coef.b * (channelValueList[18] - xtalkBase_[18]);
+        // ΔT3: CH16 → array index 15
+        predictedDelta += coef.c * (channelValueList[15] - xtalkBase_[15]);
+
+        correctedValueList[targetArrayIndex] = channelValueList[targetArrayIndex] - predictedDelta;
+    }
+
+    return correctedValueList;
+}
+
+XtalkCoef HandAngleAlgorithm::fitXtalkCoefForChannel(
+    const std::deque<std::array<double, kChannelCount>>& frameList,
+    int targetChannelIndex) const {
+    // 对齐 Python fitCrosstalkCoefficientForTargetChannel：
+    // ΔP = aΔT1 + bΔT2 + cΔT3 + d，最小二乘拟合。
+    XtalkCoef zeroCoef;
+
+    const std::size_t driverCount = kCrosstalkDriverChannelList.size();
+    const std::size_t featureCount = driverCount + (kCrosstalkFitIntercept ? 1U : 0U);
+    if (featureCount == 0 || frameList.size() < featureCount) {
+        return zeroCoef;
+    }
+
+    const std::array<double, kChannelCount>& baselineValueList = frameList.front();
+    const int targetArrayIndex = toChannelArrayIndex(targetChannelIndex);
+
+    // 构建法方程 X^T X 和 X^T y
+    std::vector<std::vector<double>> normalMatrix(featureCount, std::vector<double>(featureCount, 0.0));
+    std::vector<double> normalVector(featureCount, 0.0);
+
+    for (const auto& frameValueList : frameList) {
+        // 构造特征向量 [ΔT1, ΔT2, ΔT3, (可选)1]
+        std::vector<double> featureValueList;
+        featureValueList.reserve(featureCount);
+        for (int driverChannelIndex : kCrosstalkDriverChannelList) {
+            const int driverArrayIndex = toChannelArrayIndex(driverChannelIndex);
+            featureValueList.push_back(frameValueList[driverArrayIndex] - baselineValueList[driverArrayIndex]);
+        }
+        if (kCrosstalkFitIntercept) {
+            featureValueList.push_back(1.0);
+        }
+
+        const double targetDeltaValue = frameValueList[targetArrayIndex] - baselineValueList[targetArrayIndex];
+
+        for (std::size_t rowIndex = 0; rowIndex < featureCount; ++rowIndex) {
+            normalVector[rowIndex] += featureValueList[rowIndex] * targetDeltaValue;
+            for (std::size_t columnIndex = 0; columnIndex < featureCount; ++columnIndex) {
+                normalMatrix[rowIndex][columnIndex] += featureValueList[rowIndex] * featureValueList[columnIndex];
+            }
+        }
+    }
+
+    // 高斯消元
+    std::vector<std::vector<double>> augmentedMatrix(featureCount, std::vector<double>(featureCount + 1, 0.0));
+    for (std::size_t rowIndex = 0; rowIndex < featureCount; ++rowIndex) {
+        for (std::size_t columnIndex = 0; columnIndex < featureCount; ++columnIndex) {
+            augmentedMatrix[rowIndex][columnIndex] = normalMatrix[rowIndex][columnIndex];
+        }
+        augmentedMatrix[rowIndex][featureCount] = normalVector[rowIndex];
+    }
+
+    const auto solutionList = solveLinearSystem(augmentedMatrix, featureCount);
+    if (solutionList.empty()) {
+        return zeroCoef;
+    }
+
+    XtalkCoef coef;
+    coef.isValid = true;
+
+    // 系数映射：a=ΔT1(CH17), b=ΔT2(CH19), c=ΔT3(CH16)
+    const std::array<const char*, 3> coefficientNameList = {"a", "b", "c"};
+    for (std::size_t coefIndex = 0; coefIndex < driverCount && coefIndex < solutionList.size(); ++coefIndex) {
+        switch (coefIndex) {
+            case 0: coef.a = solutionList[coefIndex]; break;
+            case 1: coef.b = solutionList[coefIndex]; break;
+            case 2: coef.c = solutionList[coefIndex]; break;
+        }
+    }
+
+    if (kCrosstalkFitIntercept) {
+        coef.d = solutionList.back();
+        // 对齐 Python：|d| 超限不阻止使用，仅记录
+        if (std::abs(coef.d) > kCrosstalkMaxAbsIntercept) {
+            // 截距过大，系数仍标记为有效（Python 行为一致）
+        }
+    }
+
+    return coef;
+}
+
+void HandAngleAlgorithm::fitXtalkCoefs(
+    const std::deque<std::array<double, kChannelCount>>& frameList) {
+    // 对齐 Python buildCrosstalkCoefficientByTargetChannel
+    if (frameList.empty()) {
+        return;
+    }
+
+    for (int targetChannelIndex : kCrosstalkTargetChannelList) {
+        if (targetChannelIndex == kCrosstalkExcludedChannel) {
+            continue;
+        }
+        xtalkCoef_[toChannelArrayIndex(targetChannelIndex)] =
+            fitXtalkCoefForChannel(frameList, targetChannelIndex);
+    }
 }
 
 }  // namespace handdemo

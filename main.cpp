@@ -21,6 +21,7 @@ using handdemo::SerialFrameReceiver;
 using handdemo::SerialPollResult;
 using handdemo::kChannelCount;
 using handdemo::kSamplingDurationMs;
+using handdemo::kCrosstalkSamplingDurationMs;
 
 struct SamplingRuntimeState {
     bool isActive = false;
@@ -43,7 +44,17 @@ const char* getCalibrationStageText(CalibrationStage stage) {
     if (stage == CalibrationStage::Fist) {
         return "手握拳";
     }
-    return "手展开";
+    if (stage == CalibrationStage::Spread) {
+        return "手展开";
+    }
+    return "串扰补偿";
+}
+
+int getCalibrationDurationMs(CalibrationStage stage) {
+    if (stage == CalibrationStage::Crosstalk) {
+        return kCrosstalkSamplingDurationMs;
+    }
+    return kSamplingDurationMs;
 }
 
 KeyboardCommand parseKeyValue(int keyValue) {
@@ -86,6 +97,10 @@ bool tryGetNextCalibrationStage(int completedCalibrationStepCount, CalibrationSt
         stage = CalibrationStage::Spread;
         return true;
     }
+    if (completedCalibrationStepCount == 3) {
+        stage = CalibrationStage::Crosstalk;
+        return true;
+    }
     return false;
 }
 
@@ -96,7 +111,10 @@ int getCalibrationStepNumber(CalibrationStage stage) {
     if (stage == CalibrationStage::Fist) {
         return 2;
     }
-    return 3;
+    if (stage == CalibrationStage::Spread) {
+        return 3;
+    }
+    return 4;
 }
 
 void beginSamplingStage(HandAngleAlgorithm& algorithm, SamplingRuntimeState& state, CalibrationStage stage) {
@@ -116,7 +134,7 @@ void resetCalibration(HandAngleAlgorithm& algorithm, SamplingRuntimeState& state
 void printStartupGuide(const SerialFrameReceiver& receiver) {
     std::cout << "目标硬件: " << receiver.getTargetHardwareIdText() << std::endl;
     std::cout << "按键: Space=开始校准  C=重置  Q=退出" << std::endl;
-    std::cout << "校准顺序: step1=手指伸直 -> step2=手握拳 -> step3=手展开" << std::endl;
+    std::cout << "校准顺序: step1=手指伸直 -> step2=手握拳 -> step3=手展开 -> step4=串扰补偿" << std::endl;
     std::cout << "请按空格开始 step1。" << std::endl;
 }
 
@@ -193,9 +211,10 @@ int main() {
                 CalibrationStage nextStage = CalibrationStage::Closed;
                 if (tryGetNextCalibrationStage(completedCalibrationStepCount, nextStage)) {
                     beginSamplingStage(algorithm, samplingRuntimeState, nextStage);
+                    const int durationMs = getCalibrationDurationMs(nextStage);
                     std::cout << "开始 step" << getCalibrationStepNumber(nextStage)
                               << " 校准 姿态=" << getCalibrationStageText(nextStage)
-                              << " 持续 " << kSamplingDurationMs << "ms" << std::endl;
+                              << " 持续 " << durationMs << "ms" << std::endl;
                 } else {
                     std::cout << "三步校准已完成，正在实时输出角度。" << std::endl;
                 }
@@ -214,16 +233,18 @@ int main() {
         }
 
         if (samplingRuntimeState.isActive) {
+            const int currentStageDurationMs = getCalibrationDurationMs(samplingRuntimeState.stage);
             const auto elapsedTimeValue = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - samplingRuntimeState.startTimePoint);
-            if (elapsedTimeValue.count() >= kSamplingDurationMs) {
+            if (elapsedTimeValue.count() >= currentStageDurationMs) {
                 const CalibrationStage finishedStage = samplingRuntimeState.stage;
                 const std::size_t collectedFrameCount = samplingRuntimeState.collectedFrameCount;
                 samplingRuntimeState.isActive = false;
 
                 if (!algorithm.finishCalibration()) {
+                    const int failedDurationMs = getCalibrationDurationMs(finishedStage);
                     std::cout << "step" << getCalibrationStepNumber(finishedStage)
-                              << " 校准失败 2 秒内有效帧不足 帧数=" << collectedFrameCount
+                              << " 校准失败 " << (failedDurationMs / 1000) << " 秒内有效帧不足 帧数=" << collectedFrameCount
                               << " 请按 C 重试" << std::endl;
                     continue;
                 }
@@ -234,8 +255,10 @@ int main() {
                     std::cout << "请保持手握拳，按空格开始 step2。" << std::endl;
                 } else if (finishedStage == CalibrationStage::Fist) {
                     std::cout << "请保持手展开，按空格开始 step3。" << std::endl;
+                } else if (finishedStage == CalibrationStage::Spread) {
+                    std::cout << "请进行大拇指弯曲动作，按空格开始 step4（串扰补偿）。" << std::endl;
                 } else {
-                    std::cout << "三步校准完成，开始实时输出角度。" << std::endl;
+                    std::cout << "四步校准完成，开始实时输出角度。" << std::endl;
                 }
             }
         }

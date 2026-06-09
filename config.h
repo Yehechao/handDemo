@@ -25,12 +25,16 @@ constexpr std::size_t kMaxSamplingFrameCount = 5000;
 
 // ==================== 3. 均值滤波参数 ====================
 
-// kMeanFilterWindowFrameCount: 算法内部实时均值滤波窗口大小，表示最近 15 帧。
-constexpr std::size_t kMeanFilterWindowFrameCount = 15;
+// kMeanFilterWindowFrameCount: 算法内部实时均值滤波窗口大小，对齐 Python filter.movingAverageFlexWindowSize。
+constexpr std::size_t kMeanFilterWindowFrameCount = 10;
 // kThumbGateFilterWindowSize: 拇指门控比例独立滤波窗口大小，
 constexpr std::size_t kThumbGateFilterWindowSize = 10;
-// kFlexDeadbandRatio: 弯曲 ratio 的死区。
-constexpr double kFlexDeadbandRatio = 0.0;
+// kFlexDeadbandRatio: 弯曲 ratio 的死区，对齐 Python stability.flexDeadbandRatio。
+constexpr double kFlexDeadbandRatio = 0.015;
+
+// kInvalidChannelSpanThresholdValue: 校准阶段目标值相对闭合值的正向变化小于该阈值时，
+// 判定该通道无效并按 0 度处理，对齐 Python sampling.invalidChannelSpanThresholdValue。
+constexpr double kInvalidChannelSpanThresholdValue = 10.0;
 
 // ==================== 4. 展开（Spread）参数 ====================
 
@@ -48,9 +52,10 @@ struct SpreadPairConfig {
 };
 
 // kSpreadPairConfigList: 三组四指指缝展开配置，顺序为 ringPinky、middleRing、indexMiddle。
+// 展开最大角对齐 Python kinematics.*.openRootAngle=25。
 constexpr std::array<SpreadPairConfig, 3> kSpreadPairConfigList = {{
     {4,  25.0, 1.40},  // ringPinky:   外指=小指
-    {8,  20.0, 1.30},  // middleRing:  外指=无名指
+    {8,  25.0, 1.30},  // middleRing:  外指=无名指
     {12, 25.0, 1.12},  // indexMiddle: 外指=食指
 }};
 
@@ -64,11 +69,11 @@ constexpr int kThumbInwardGateChannel = 18;
 constexpr double kThumbFlexGateStartRatio = 0.18;
 constexpr double kThumbFlexGateEndRatio = 0.45;
 
-// kThumbGateDeadbandRatio: 拇指内收门控死区。
-constexpr double kThumbGateDeadbandRatio = 0.0;
+// kThumbGateDeadbandRatio: 拇指内收门控死区，对齐 Python stability.thumbGateDeadbandRatio。
+constexpr double kThumbGateDeadbandRatio = 0.025;
 
-// kSpreadDeadbandRatio: 展开 ratio 死区。
-constexpr double kSpreadDeadbandRatio = 0.0;
+// kSpreadDeadbandRatio: 展开 ratio 死区，对齐 Python stability.spreadDeadbandRatio。
+constexpr double kSpreadDeadbandRatio = 0.02;
 
 // kFoldSpreadSuppress*: 相邻第一指节弯曲触发展开角算法收束，中节/末节不触发。
 constexpr double kFoldSpreadSuppressStartRatio = 0.10;
@@ -129,12 +134,12 @@ struct FingerFlexAngleModel {
 
 // kFingerFlexAngleModelByIndex: 四指弯曲角上限，顺序为食指、中指、无名指、小指。
 // 对齐 Python kinematics.fingerModelByFingerName:
-// index/middle/ring/pinky: holdRootAngle=90, holdJointAngleList=[90, 90]
+// index/middle/ring/pinky: holdRootAngle=85, holdJointAngleList=[85, 90]
 constexpr std::array<FingerFlexAngleModel, 4> kFingerFlexAngleModelByIndex = {{
-    {90.0, 90.0, 90.0},  // 食指
-    {90.0, 90.0, 90.0},  // 中指
-    {90.0, 90.0, 90.0},  // 无名指
-    {90.0, 90.0, 90.0},  // 小指
+    {85.0, 85.0, 90.0},  // 食指
+    {85.0, 85.0, 90.0},  // 中指
+    {85.0, 85.0, 90.0},  // 无名指
+    {85.0, 85.0, 90.0},  // 小指
 }};
 
 // ThumbFlexAngleModel: 拇指两级弯曲角上限定义，单位为度。
@@ -146,10 +151,33 @@ struct ThumbFlexAngleModel {
     double ipHoldDeltaAngle;
 };
 
-// holdSegment23Angle=85 (CH18), holdSegment34Angle=85 (CH17)
+// holdSegment23Angle=85 (CH18), holdSegment34Angle=85 (CH17)，对齐 Python kinematics.thumb
 constexpr ThumbFlexAngleModel kThumbFlexAngleModel = {
     85.0,
-    90.0,
+    85.0,
 };
+
+// ==================== 7. 串扰补偿（Crosstalk）参数 ====================
+
+// kCrosstalkSamplingDurationMs: 第四阶段串扰补偿校准的采样时长，单位毫秒，
+// 对齐 Python crosstalkCompensation.calibrationDurationSecond=4.0。
+constexpr int kCrosstalkSamplingDurationMs = 4000;
+
+// kCrosstalkDriverChannelList: 作为自变量的驱动通道，对齐 Python crosstalkCompensation.driverChannelList。
+constexpr std::array<int, 3> kCrosstalkDriverChannelList = {17, 19, 16};
+
+// kCrosstalkTargetChannelList: 被补偿的目标通道，对齐 Python crosstalkCompensation.targetChannelList。
+constexpr std::array<int, 15> kCrosstalkTargetChannelList = {
+    15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1,
+};
+
+// kCrosstalkExcludedChannel: 不参与串扰拟合的通道，对齐 Python crosstalkCompensation.excludedChannelList。
+constexpr int kCrosstalkExcludedChannel = 18;
+
+// kCrosstalkFitIntercept: 是否拟合截距项 d，对齐 Python crosstalkCompensation.fitIntercept。
+constexpr bool kCrosstalkFitIntercept = true;
+
+// kCrosstalkMaxAbsIntercept: 截距绝对值上限，对齐 Python crosstalkCompensation.maxAbsIntercept。
+constexpr double kCrosstalkMaxAbsIntercept = 30.0;
 
 }  // namespace handdemo
