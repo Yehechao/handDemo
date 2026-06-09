@@ -1,268 +1,210 @@
-# handDemo C++ 纯算法版本
+# handDemo C++ 算法 SDK 开发说明
 
-这个项目是手套 AD 数据到真实角度输出的 C++ 版本，当前目标是和 Python 项目的核心算法保持一致。C++ 只保留串口 demo 和纯角度输出，不包含 Python 主程序里的动画 UI。
+## 项目目标
 
-## 1. 项目结构
+本项目目标是把 Python 上位机当前版本的纯算法链路迁移成 C++ SDK，供客户在自己的程序中直接调用。
 
-```text
-config.h              通道映射、角度上限、滤波、门控和收束参数
-hand_algorithm.h      纯算法接口与输出结构
-hand_algorithm.cpp    校准、滤波、ratio、角度计算
-serial_port_io.*      串口搜索、接收和 AD 帧解析
-main.cpp              控制台 demo 入口
-CMakeLists.txt        CMake 构建入口
-opencv/               当前工程依赖的 OpenCV 文件
-```
+当前只关注算法：
 
-## 2. 编译运行
+- 输入：19 路 AD 原始值。
+- 校准：闭合、握拳、展开、串扰补偿。
+- 输出：各手指关节角度。
 
-### 配置
+当前不关注：
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-```
+- UI。
+- 动画。
+- 3D 骨架。
+- MANO 手模。
+- 打包发布。
 
-### 编译 Release
+## 当前代码状态
 
-```powershell
-cmake --build build --config Release
-```
+核心代码：
 
-### 运行 Release
+- `config.h`：固定配置、通道映射、最大角度。
+- `hand_algorithm.h`：算法类接口。
+- `hand_algorithm.cpp`：校准、滤波、AD 到角度计算。
+- `serial_port_io.*`：串口读取和协议解析。
+- `main.cpp`：当前控制台测试入口。
+- `ALGORITHM_PORTING_TODO.md`：详细迁移任务文档。
 
-```powershell
-.\build\Release\handDemo.exe
-```
+当前 C++ 已实现：
 
-## 3. Demo 操作
+- 19 路 AD 输入。
+- `Closed / Fist / Spread` 三步校准。
+- 校准阶段多帧平均。
+- AD 均值滤波。
+- AD 归一化为 `0~1` ratio。
+- ratio 死区稳定。
+- 四指 MCP/PIP/DIP 角度输出。
+- 四指展开角输出。
+- 大拇指两段弯曲角输出。
+- 大拇指开合角输出，正值外展，负值内收。
 
-程序启动后会按 `VID/PID` 搜索目标串口设备，并持续读取 19 路 AD 数据。
+当前 C++ 还没有完全对齐 Python 最新算法。
 
-按键：
+## 必须补齐的算法功能
 
-- `Space`：开始当前阶段校准
-- `C`：清空校准并重新开始
-- `Q` / `Esc`：退出程序
+详细实现方式见：
 
-校准顺序：
+- `ALGORITHM_PORTING_TODO.md`
 
-```text
-Closed -> Fist -> Spread
-```
+必须补齐：
 
-对应姿态：
+1. 增加第四阶段 `Crosstalk` 串扰补偿校准。
+2. 使用完整串扰采样序列拟合 `ΔP = aΔT1 + bΔT2 + cΔT3 + d`。
+3. 实时计算角度前，对 `CH15~CH1` 做串扰补偿。
+4. 增加无效通道判定：目标姿态相对闭合变化小于阈值时，该通道角度输出 0。
+5. 同步 Python 当前最大角度配置。
+6. 去掉 C++ 旧版展开 `angleScale`，展开角只使用 `openRootAngle * ratio`。
+7. 同步 Python 当前滤波窗口和死区参数。
 
-```text
-手闭合/基准 -> 手握拳 -> 手展开
-```
+## Python 参考路径
 
-三步校准完成后，程序持续输出五指弯曲角和展开角。
+Python 项目：
 
-## 4. 核心接口
+- `D:/yhc_code/handDemo_py`
 
-核心类定义在 [hand_algorithm.h](./hand_algorithm.h)：
+重点参考：
 
-```cpp
-class HandAngleAlgorithm {
-public:
-    bool setRuntimeConfig(const RuntimeConfig& runtimeConfig);
-    void reset();
-    void beginCalibration(CalibrationStage stage);
-    bool pushCalibrationFrame(const int16_t adValues[kChannelCount]);
-    bool finishCalibration();
-    bool isReady() const;
-    bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
-};
-```
+- `D:/yhc_code/handDemo_py/config.json`
+- `D:/yhc_code/handDemo_py/core/kinematics.py`
+- `D:/yhc_code/handDemo_py/core/hand_landmark_ui.py`
+- `D:/yhc_code/handDemo_py/core/serial_protocol.py`
 
-输入固定为 19 路 AD：
+核心函数：
 
-```cpp
-const int16_t adValues[kChannelCount]
-```
+- `core/kinematics.py::applyCrosstalkCompensationToChannelValueList`
+- `core/kinematics.py::calculateChannelRatio`
+- `core/kinematics.py::getInvalidChannelReason`
+- `core/kinematics.py::getFlexRatio`
+- `core/kinematics.py::getSpreadRatio`
+- `core/kinematics.py::getThumbInwardGateRatio`
+- `core/kinematics.py::buildMotionState`
+- `core/hand_landmark_ui.py::fitCrosstalkCoefficientForTargetChannel`
+- `core/hand_landmark_ui.py::buildCrosstalkCoefficientByTargetChannel`
+- `core/hand_landmark_ui.py::applyStageCalibrationValue`
 
-其中：
+## C++ 命名精简规范
 
-- `kChannelCount = 19`
-- 每路 AD 范围约为 `0 ~ 4096`
-- 通道顺序对应 `CH1 ~ CH19`
+当前 C++ 函数和变量名偏长，例如：
 
-## 5. 输出结构
+- `buildAverageCalibrationFrame`
+- `applyStageCalibrationValue`
+- `closedCalibrationValueList_`
+- `spreadStableStateByChannel_`
+- `thumbInwardGateChannel`
 
-```cpp
-struct HandAngleOutput {
-    float little_finger[4];  // [MCP, PIP, DIP, pinky-ring_spread]
-    float ring_finger[4];    // [MCP, PIP, DIP, ring-middle_spread]
-    float middle_finger[3];  // [MCP, PIP, DIP]
-    float index_finger[4];   // [MCP, PIP, DIP, index-middle_spread]
-    float thumb[3];          // [MCP, IP, thumb-index_spread] 正=外展, 负=内收
-};
-```
+后续开发 SDK 时建议统一精简。原则是：**短，但不能失去含义**。
 
-数值单位统一为 `度`，当前输出保留 1 位小数。
+### 推荐缩写
 
-注意：当前 C++ 输出中，`thumb[0]` 对应拇指第一指节（`CH18`，MCP），`thumb[1]` 对应拇指第二指节（`CH17`，IP）；如外部系统需要严格按 Python 展示顺序消费，应按这个语义读取。
+- `Calibration` 简写为 `Calib`
+- `Channel` 简写为 `Ch`
+- `Value` 简写为 `Val`
+- `Frame` 简写为 `Frm`
+- `Coefficient` 简写为 `Coef`
+- `Crosstalk` 简写为 `Xtalk`
+- `Ratio` 保持 `Ratio`
+- `Angle` 保持 `Angle`
+- `Thumb` 保持 `Thumb`
+- `Spread` 保持 `Spread`
+- `Flex` 保持 `Flex`
 
-## 6. 当前算法逻辑
+### 推荐命名示例
 
-### 弯曲角
+函数名建议：
 
-弯曲通道使用 `Closed -> Fist` 校准范围计算 ratio：
+- `buildAverageCalibrationFrame()` 改为 `avgCalibFrm()`
+- `applyStageCalibrationValue()` 改为 `setStageCalib()`
+- `buildStageCalibrationTemplate()` 改为 `stageCalibTpl()`
+- `calculateChannelRatio()` 改为 `calcChRatio()`
+- `applyCrosstalkCompensation()` 改为 `applyXtalk()`
+- `fitCrosstalkCoefficientForTargetChannel()` 改为 `fitXtalkCoef()`
+- `buildCrosstalkCoefficientByTargetChannel()` 改为 `fitXtalkCoefs()`
+- `getThumbGateRatio()` 改为 `thumbGateRatio()`
+- `buildOutputValue()` 改为 `buildOutput()`
 
-```text
-angle = flexRatio * maxFlexAngle
-```
+成员变量建议：
 
-四指通道：
+- `closedCalibrationValueList_` 改为 `closedCalib_`
+- `fistCalibrationValueList_` 改为 `fistCalib_`
+- `spreadCalibrationValueList_` 改为 `openCalib_`
+- `hasClosedCalibration_` 改为 `hasClosed_`
+- `hasFistCalibration_` 改为 `hasFist_`
+- `hasSpreadCalibration_` 改为 `hasOpen_`
+- `crosstalkCoefficientByChannel_` 改为 `xtalkCoef_`
+- `crosstalkBaselineValueList_` 改为 `xtalkBase_`
+- `rawFilterState_` 改为 `rawFilter_`
+- `flexStableStateByChannel_` 改为 `flexStable_`
+- `spreadStableStateByChannel_` 改为 `spreadStable_`
 
-```text
-食指:   CH15, CH14, CH13
-中指:   CH11, CH10, CH9
-无名指: CH7,  CH6,  CH5
-小指:   CH3,  CH2,  CH1
-```
+结构体建议：
 
-当前四指角度上限：
+- `HandAngleAlgorithm` 可保留，作为 SDK 主类名。
+- `HandAngleOutput` 可保留，作为客户接口输出结构。
+- `RuntimeConfig` 可保留，作为客户配置结构。
+- `CrosstalkCoefficient` 建议改为 `XtalkCoef`。
+- `RatioStableState` 建议改为 `RatioState`。
+- `SamplingState` 建议改为 `SampleState`。
+- `RawFilterState` 建议改为 `FilterState`。
 
-```text
-MCP/PIP/DIP = 90 / 90 / 90
-```
+### 命名边界
 
-当前拇指角度上限：
+不要为了短而使用难懂缩写：
 
-```text
-CH18 / CH17 = 85 / 85
-```
+- 不建议 `c`, `v`, `r`, `s` 这种单字母成员变量。
+- 不建议把公开 API 改得太晦涩。
+- 客户会直接调用的类、结构体和函数，可以比内部变量稍长一点。
 
-### 四指展开角收束
+推荐规则：
 
-展开通道先根据 `Closed -> Spread` 计算原始展开角，然后在算法层按相邻两侧第一指节弯曲收束：
+- 公开 API：清楚优先，例如 `processFrame()`、`beginCalibration()` 可以保留。
+- 内部函数：短一点，例如 `calcChRatio()`、`applyXtalk()`。
+- 内部成员变量：短一点，例如 `closedCalib_`、`xtalkCoef_`。
 
-```text
-rawSpreadAngle = spreadRatio * maxSpreadAngle * angleScale
-suppressRatio = smoothstep(0.10, 0.60, max(leftRootFlexRatio, rightRootFlexRatio))
-effectiveSpreadAngle = rawSpreadAngle * (1 - suppressRatio)
-```
+## 推荐开发顺序
 
-收束对应关系：
+1. 先按 Python 当前 `config.json` 同步 `config.h` 参数。
+2. 精简内部命名，但先不要改变公开 API。
+3. 去掉展开 `angleScale`。
+4. 增加无效通道判定。
+5. 增加 `Crosstalk` 校准阶段和采样帧缓存。
+6. 实现 `a,b,c,d` 最小二乘拟合。
+7. 在实时 `processFrame()` 中加入串扰补偿。
+8. 用同一组 AD 数据对比 Python 和 C++ 输出角度。
 
-```text
-CH12 食指-中指展开 -> max(食指根节 CH15, 中指根节 CH11)
-CH8  中指-无名指展开 -> max(中指根节 CH11, 无名指根节 CH7)
-CH4  无名指-小指展开 -> max(无名指根节 CH7, 小指根节 CH3)
-```
+## 验收标准
 
-中节/末节弯曲不触发展开收束，拇指 CH16 仍走独立开合和门控逻辑。
-
-### 拇指开合
-
-`CH16` 控制拇指开合幅度，门控通道用于判断向外/向内方向。
-
-门控通道在 [config.h](./config.h) 中配置：
-
-```cpp
-constexpr int kThumbInwardGateChannel = 18;
-```
-
-可选：
-
-```text
-18 或 19
-```
-
-默认是 `CH18`。可通过 `RuntimeConfig` 在初始化时覆盖为 `CH19`，不调用时继续使用 `config.h` 默认值。
-
-拇指开合公式：
-
-```text
-outwardRatio = CH16_open_ratio * (1 - gateRatio)
-inwardRatio  = CH16_fist_ratio * gateRatio
-thumbSpreadAngle = 45 * outwardRatio - 45 * inwardRatio
-```
-
-输出符号：
+角度输出：
 
 ```text
-正数 = 外展
-负数 = 内收
+abs(cppAngle - pythonAngle) <= 0.2 度
 ```
 
-## 7. 滤波与稳定
-
-当前 C++ 配置：
-
-```cpp
-constexpr std::size_t kMeanFilterWindowFrameCount = 15;
-constexpr std::size_t kThumbGateFilterWindowSize = 10;
-```
-
-含义：
-
-- `kMeanFilterWindowFrameCount`：19 路原始 AD 输入的实时均值滤波窗口。
-- `kThumbGateFilterWindowSize`：拇指门控 ratio 的独立均值滤波窗口。
-
-ratio 死区：
-
-```cpp
-constexpr double kFlexDeadbandRatio = 0.0;
-constexpr double kSpreadDeadbandRatio = 0.0;
-constexpr double kThumbGateDeadbandRatio = 0.0;
-```
-
-`0.0` 表示不额外压制细小 ratio 变化。
-
-如需在打包 DLL 后由外部配置文件覆盖部分参数，可在校准前调用：
-
-```cpp
-HandAngleAlgorithm algorithm;
-
-RuntimeConfig runtimeConfig;
-runtimeConfig.meanFilterWindowFrameCount = 15;
-runtimeConfig.thumbGateFilterWindowSize = 10;
-runtimeConfig.thumbInwardGateChannel = 18;
-runtimeConfig.thumbGateDeadbandRatio = 0.0;
-runtimeConfig.spreadDeadbandRatio = 0.0;
-
-if (!algorithm.setRuntimeConfig(runtimeConfig)) {
-    // 配置非法：窗口必须大于 0，门控通道只允许 18 或 19，deadband 范围为 0.0~1.0
-}
-```
-
-调用成功后算法会清空旧校准、滤波和稳定状态；因此建议在开始三步校准前调用。
-
-## 8. 与 Python 版本的关系
-
-当前 C++ 算法已对齐 Python 的主要计算逻辑：
-
-- 19 路通道输入
-- 三步校准：`Closed / Fist / Spread`
-- 拇指开合门控可选 `CH18 / CH19`
-- 四指展开角在算法层按根节弯曲收束
-- 四指弯曲角上限 `90 / 90 / 90`
-- 拇指弯曲角上限 `85 / 85`
-
-已知差异：
-
-- C++ 原始 AD 均值滤波默认 15 帧，可通过 `RuntimeConfig` 覆盖。
-- Python 默认滤波窗口来自 `config.json`，当前为 10 帧，并可在 UI 中调整。
-- C++ 当前没有 Python 的 UI、动画、语言切换和通道监视器。
-
-## 9. 接入建议
-
-外部系统如果已有自己的串口或设备层，建议只复用：
-
-```cpp
-HandAngleAlgorithm
-HandAngleOutput
-```
-
-典型流程：
+串扰系数：
 
 ```text
-1. 创建 HandAngleAlgorithm
-2. 依次完成 Closed / Fist / Spread 三步校准
-3. isReady() 为 true 后持续调用 processFrame()
-4. 使用 HandAngleOutput 中的真实角度
+abs(cppCoef - pythonCoef) <= 1e-4
 ```
 
-`main.cpp` 只是控制台 demo，不建议作为正式业务接口直接依赖。
+串扰补偿后的 AD：
+
+```text
+abs(cppCorrectedAd - pythonCorrectedAd) <= 1e-4
+```
+
+无效通道：
+
+```text
+stageAd - closedAd <= 0 或 < 10 时，角度必须输出 0
+```
+
+## 注意事项
+
+- SDK 只输出算法结果，不要引入 UI 和动画逻辑。
+- 串扰补偿只修正 AD，不直接修正角度。
+- 通道编号保持 `CH1~CH19`，对外文档使用 1-based 编号。
+- C++ 源码文件保存为 UTF-8 with BOM。
+- Python 参考代码不使用命令行 args，C++ 测试入口也尽量保持固定变量配置，避免额外复杂度。
