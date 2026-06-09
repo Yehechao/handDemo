@@ -63,6 +63,7 @@ beginCalibration(Closed) → pushCalibrationFrame × N → finishCalibration()
 | `isReady()` | 三步校准是否完成 |
 | `processFrame(ad, output)` | 实时计算角度 |
 | `reset()` | 清空全部状态 |
+| `getCurrentAd(filtered)` | 获取当前帧 AD 值，true=滤波后，false=原始 |
 | `getXtalkUnstableChList()` | 获取串扰 d 异常通道列表 |
 
 ## 核心类

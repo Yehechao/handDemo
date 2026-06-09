@@ -61,6 +61,9 @@ public:
     bool isReady() const;
     // processFrame: 传入一帧 AD 数据并输出弯曲角结构体，未完成校准时返回 false
     bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
+    // getCurrentAd: 获取最近一帧 AD 值，不受校准状态影响。
+    // filtered=true 返回均值滤波后的值，filtered=false 返回原始 AD。
+    std::array<double, kChannelCount> getCurrentAd(bool filtered = true) const;
     // getXtalkUnstableChList: 返回串扰校准后 |d| 超限的异常通道列表（1-based CH 编号），客户可据此判断校准稳定性
     std::vector<int> getXtalkUnstableChList() const;
 
@@ -119,6 +122,7 @@ private:
     RuntimeConfig runtimeConfig_{};
     SampleState samplingState_{};
     FilterState rawFilter_{};
+    std::array<int16_t, kChannelCount> latestRawAd_{};
     std::array<RatioState, kChannelCount> flexStable_{};
     std::array<RatioState, kChannelCount> spreadStable_{};
     RatioState thumbGateStableState_{};

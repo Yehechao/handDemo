@@ -134,6 +134,7 @@ void HandAngleAlgorithm::resetFilterState() {
     }
     thumbGateStableState_ = {};
     thumbGateFilterDeque_.clear();
+    latestRawAd_.fill(0);
     thumbInwardAmplitudeStable_ = {};
 }
 
@@ -564,7 +565,7 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
 }
 
 bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue) {
-    if (adValues == nullptr || !isReady()) {
+    if (adValues == nullptr) {
         clearOutputValueList(outputValue.little_finger, 4);
         clearOutputValueList(outputValue.ring_finger, 4);
         clearOutputValueList(outputValue.middle_finger, 3);
@@ -573,11 +574,36 @@ bool HandAngleAlgorithm::processFrame(const int16_t adValues[kChannelCount], Han
         return false;
     }
 
+    // 缓存原始 AD + 均值滤波：不受校准状态影响，确保 getCurrentAd 随时可用
+    for (std::size_t i = 0; i < kChannelCount; ++i) {
+        latestRawAd_[i] = adValues[i];
+    }
     rawFilter_.filteredValueList = filterFrm(adValues);
+
+    if (!isReady()) {
+        clearOutputValueList(outputValue.little_finger, 4);
+        clearOutputValueList(outputValue.ring_finger, 4);
+        clearOutputValueList(outputValue.middle_finger, 3);
+        clearOutputValueList(outputValue.index_finger, 4);
+        clearOutputValueList(outputValue.thumb, 3);
+        return false;
+    }
+
     // 实时串扰补偿：在滤波后、ratio 计算前扣除预测串扰。
     const auto correctedValueList = applyXtalk(rawFilter_.filteredValueList);
     buildOutputValue(correctedValueList, outputValue);
     return true;
+}
+
+std::array<double, kChannelCount> HandAngleAlgorithm::getCurrentAd(bool filtered) const {
+    if (filtered) {
+        return rawFilter_.filteredValueList;
+    }
+    std::array<double, kChannelCount> resultValueList{};
+    for (std::size_t i = 0; i < kChannelCount; ++i) {
+        resultValueList[i] = static_cast<double>(latestRawAd_[i]);
+    }
+    return resultValueList;
 }
 
 // ==================== 串扰补偿实现 ====================
