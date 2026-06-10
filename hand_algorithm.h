@@ -33,6 +33,11 @@ struct RuntimeConfig {
     int thumbInwardGateChannel = kThumbInwardGateChannel;
     double thumbGateDeadbandRatio = kThumbGateDeadbandRatio;
     double spreadDeadbandRatio = kSpreadDeadbandRatio;
+    double flexDeadbandRatio = kFlexDeadbandRatio;
+    double thumbFlexGateStartRatio = kThumbFlexGateStartRatio;
+    double thumbFlexGateEndRatio = kThumbFlexGateEndRatio;
+    double foldSpreadSuppressStartRatio = kFoldSpreadSuppressStartRatio;
+    double foldSpreadSuppressEndRatio = kFoldSpreadSuppressEndRatio;
     bool crosstalkFitIntercept = kCrosstalkFitIntercept;
     double crosstalkMaxAbsIntercept = kCrosstalkMaxAbsIntercept;
 };
@@ -57,7 +62,7 @@ public:
     void beginCalibration(CalibrationStage stage);
     bool pushCalibrationFrame(const int16_t adValues[kChannelCount]);
     bool finishCalibration();
-    // isReady: Closed/Fist/Spread 三步校准都完成后返回 true（Crosstalk 可选，不阻塞）
+    // isReady: Closed/Fist/Spread/Crosstalk 四步校准全部完成后才返回 true
     bool isReady() const;
     // processFrame: 传入一帧 AD 数据并输出弯曲角结构体，未完成校准时返回 false
     bool processFrame(const int16_t adValues[kChannelCount], HandAngleOutput& outputValue);
@@ -70,6 +75,9 @@ public:
     std::size_t getXtalkValidTargetChannelCount() const;
 
 private:
+    // hasBaseCalibration: Closed/Fist/Spread 三步基础校准是否完成（供内部阶段前置检查使用）
+    bool hasBaseCalibration() const;
+
     struct SampleState {
         bool isActive = false;
         CalibrationStage stage = CalibrationStage::Closed;

@@ -1,10 +1,10 @@
-# handDemo — 手部数据手套 C++ 算法 SDK
+# handDemo — 手部数据手套 C++ 主体项目
 
 > Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
 
 ## 概述
 
-本项目是手部数据手套的纯算法 C++ SDK，负责将 19 路 AD 传感器原始值转换为五指关节角度输出。可打包为 DLL 供客户集成。
+本项目是手部数据手套的 C++ 主体项目，负责将 19 路 AD 传感器原始值转换为五指关节角度输出。当前阶段先完成主体算法和控制台验证，暂不提供导出接口。
 
 - 输入：19 路 AD 原始值（int16_t[19]）
 - 校准：闭合 → 握拳 → 展开 → 串扰补偿（四步）
@@ -44,30 +44,12 @@ cd build && cmake .. && cmake --build . --config Release
 beginCalibration(Closed) → pushCalibrationFrame × N → finishCalibration()
 → beginCalibration(Fist)  → pushCalibrationFrame × N → finishCalibration()
 → beginCalibration(Spread) → pushCalibrationFrame × N → finishCalibration()
-→ beginCalibration(Crosstalk) → pushCalibrationFrame × N → finishCalibration()  // 可选
+→ beginCalibration(Crosstalk) → pushCalibrationFrame × N → finishCalibration()
 → isReady() == true
 → processFrame() × N  // 实时输出
 ```
 
-三步校准（Closed/Fist/Spread）完成后 `isReady()` 即返回 true。第四步 Crosstalk 为可选，完成后才启用串扰补偿。
-
-## SDK 公开 API
-
-对外接口定义于 `matrix_hand_sdk.h`，使用 C 风格接口，不暴露 C++ 类型。
-
-| 函数 | 说明 |
-|------|------|
-| `matrix_hand_create()` | 创建 SDK 实例 |
-| `matrix_hand_destroy(handle)` | 销毁实例 |
-| `matrix_hand_reset(handle)` | 清空校准与滤波状态 |
-| `matrix_hand_set_config(handle, config)` | 设置运行时参数（校准前调用） |
-| `matrix_hand_begin_calibration(handle, stage)` | 开始某阶段校准 |
-| `matrix_hand_push_calibration_frame(handle, ad)` | 推入一帧 AD 采样 |
-| `matrix_hand_finish_calibration(handle, result)` | 结束校准并获取质量结果 |
-| `matrix_hand_is_ready(handle, ready)` | 查询三步校准是否完成 |
-| `matrix_hand_process_frame(handle, ad, output)` | 实时计算角度 |
-| `matrix_hand_get_current_ad(handle, filtered, ad)` | 获取当前帧 AD 值 |
-| `matrix_hand_status_text(status)` | 错误码转可读文本 |
+四步校准（Closed/Fist/Spread/Crosstalk）全部完成后 `isReady()` 才返回 true，之后才允许实时输出。
 
 ## 核心类
 
@@ -106,11 +88,11 @@ beginCalibration(Closed) → pushCalibrationFrame × N → finishCalibration()
 
 - 所有通道共用同一个均值滤波窗口，不做 flex/spread/thumbGate 分组。
 - 串扰补偿只修正进入归一化前的 AD 值，不直接修改角度。
-- Crosstalk 校准非必须，三步校准即可开始实时输出。
+- 必须完成 Closed/Fist/Spread/Crosstalk 四步校准后才允许实时输出。
 
 ## Python 参考
 
-Python 参考实现位于 `D:/yhc_code/handDemo_py`。C++ 算法 SDK 与其纯算法部分功能一致（不含 UI、动画、3D 骨架、MANO 等模块）。
+Python 参考实现位于 `D:/yhc_code/handDemo_py`。C++ 主体算法与其纯算法部分功能一致（不含 UI、动画、3D 骨架、MANO 等模块）。
 
 ## 编码约定
 

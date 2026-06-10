@@ -7,10 +7,10 @@
 校准需按顺序完成：
 
 ```
-Closed（手指伸直）→ Fist（握拳）→ Spread（手展开）→ Crosstalk（串扰补偿，可选）
+Closed（手指伸直）→ Fist（握拳）→ Spread（手展开）→ Crosstalk（串扰补偿）
 ```
 
-前三步完成后即可输出角度，第四步为可选增强。
+四步全部完成后才可输出角度。Crosstalk 完成后启用串扰补偿。
 
 ### 阶段 1：Closed（手指伸直）
 
@@ -39,63 +39,45 @@ Closed（手指伸直）→ Fist（握拳）→ Spread（手展开）→ Crossta
 大拇指进行弯曲动作，系统采集多帧数据拟合串扰系数。
 
 - 采样时长建议 4000 ms。
-- 该阶段为**可选**。跳过不影响前三步角度输出。
-- 拟合失败（如数据无变化导致矩阵奇异）时返回 `MATRIX_HAND_ERROR_XTALK_FIT_FAILED`。
+- 该阶段为**必须**。未完成 Crosstalk 校准不允许实时输出角度。
+- 拟合失败（如数据无变化导致矩阵奇异）时 `finishCalibration()` 返回 `false`。
 - 拟合成功后启用实时串扰补偿，修正 AD 值。
 
 ## 调用顺序
 
-```c
-MatrixHandHandle handle = matrix_hand_create();
-
-// 可选：设置配置参数
-MatrixHandRuntimeConfig cfg = {10, 10, 18, 0.025, 0.02, 1, 30.0};
-matrix_hand_set_config(handle, &cfg);
+```cpp
+HandAngleAlgorithm algorithm;
+RuntimeConfig config;
+algorithm.setRuntimeConfig(config);
 
 // Step 1: Closed
-matrix_hand_begin_calibration(handle, MATRIX_HAND_CALIBRATION_CLOSED);
-for (...) { matrix_hand_push_calibration_frame(handle, ad); }
-matrix_hand_finish_calibration(handle, &result);
+algorithm.beginCalibration(CalibrationStage::Closed);
+for (...) { algorithm.pushCalibrationFrame(ad); }
+algorithm.finishCalibration();
 
 // Step 2: Fist
-matrix_hand_begin_calibration(handle, MATRIX_HAND_CALIBRATION_FIST);
-for (...) { matrix_hand_push_calibration_frame(handle, ad); }
-matrix_hand_finish_calibration(handle, &result);
+algorithm.beginCalibration(CalibrationStage::Fist);
+for (...) { algorithm.pushCalibrationFrame(ad); }
+algorithm.finishCalibration();
 
 // Step 3: Spread
-matrix_hand_begin_calibration(handle, MATRIX_HAND_CALIBRATION_SPREAD);
-for (...) { matrix_hand_push_calibration_frame(handle, ad); }
-matrix_hand_finish_calibration(handle, &result);
+algorithm.beginCalibration(CalibrationStage::Spread);
+for (...) { algorithm.pushCalibrationFrame(ad); }
+algorithm.finishCalibration();
 
-// 此时 is_ready 返回 1
+// Step 4: Crosstalk（必须）
+algorithm.beginCalibration(CalibrationStage::Crosstalk);
+for (...) { algorithm.pushCalibrationFrame(ad); }
+algorithm.finishCalibration();
 
-// Step 4: Crosstalk（可选）
-matrix_hand_begin_calibration(handle, MATRIX_HAND_CALIBRATION_CROSSTALK);
-for (...) { matrix_hand_push_calibration_frame(handle, ad); }
-matrix_hand_finish_calibration(handle, &result);
+// 此时 isReady() 返回 true
 
 // 实时输出
-int32_t ready = 0;
-matrix_hand_is_ready(handle, &ready);
-if (ready) {
-    MatrixHandAngleOutput output;
-    matrix_hand_process_frame(handle, ad, &output);
+HandAngleOutput output;
+if (algorithm.isReady()) {
+    algorithm.processFrame(ad, output);
 }
-
-matrix_hand_destroy(handle);
 ```
-
-## MatrixHandCalibrationResult 字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `stage` | int32_t | 当前阶段枚举值 |
-| `frame_count` | int32_t | 本阶段采集帧数 |
-| `valid_channel_count` | int32_t | 有效通道数 |
-| `invalid_channel_count` | int32_t | 无效通道数 |
-| `invalid_channels` | int32_t[19] | 无效通道编号列表（1-based，CH1~CH19） |
-| `xtalk_unstable_count` | int32_t | 串扰截距异常通道数（仅 Crosstalk） |
-| `xtalk_unstable_channels` | int32_t[19] | 串扰截距异常通道列表（仅 Crosstalk） |
 
 ## 无效通道判定
 
@@ -114,5 +96,5 @@ delta = stageAvg[ch] - closedAvg[ch]
 ## 串扰异常通道
 
 - 串扰拟合的截距项 `d` 的绝对值超过 `crosstalk_max_abs_intercept`（默认 30）时，标记为异常通道。
-- 异常通道信息写入 `xtalk_unstable_channels`，客户可据此判断校准质量。
+- 异常通道可通过 `getXtalkUnstableChList()` 获取，通道编号为 1-based。
 - 异常通道**不影响补偿计算**，仅作提示用途。

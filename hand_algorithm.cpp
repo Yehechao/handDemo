@@ -71,12 +71,13 @@ double getSmoothstepRatio(double startRatio, double endRatio, double value) {
     return t * t * (3.0 - 2.0 * t);
 }
 
-double buildEffectiveSpreadAngle(double spreadRatio, double adjacentRootFlexRatio, const SpreadPairConfig& spreadConfig) {
+double buildEffectiveSpreadAngle(double spreadRatio, double adjacentRootFlexRatio,
+    const SpreadPairConfig& spreadConfig, double suppressStartRatio, double suppressEndRatio) {
     // 展开角 = openRootAngle * ratio * suppress。
     const double rawSpreadAngle = spreadRatio * spreadConfig.openRootAngle;
     const double suppressRatio = getSmoothstepRatio(
-        kFoldSpreadSuppressStartRatio,
-        kFoldSpreadSuppressEndRatio,
+        suppressStartRatio,
+        suppressEndRatio,
         adjacentRootFlexRatio);
     return rawSpreadAngle * (1.0 - suppressRatio);
 }
@@ -99,11 +100,28 @@ bool HandAngleAlgorithm::setRuntimeConfig(const RuntimeConfig& runtimeConfig) {
         !isValidThumbInwardGateChannel(runtimeConfig.thumbInwardGateChannel) ||
         !std::isfinite(runtimeConfig.thumbGateDeadbandRatio) ||
         !std::isfinite(runtimeConfig.spreadDeadbandRatio) ||
+        !std::isfinite(runtimeConfig.flexDeadbandRatio) ||
+        !std::isfinite(runtimeConfig.thumbFlexGateStartRatio) ||
+        !std::isfinite(runtimeConfig.thumbFlexGateEndRatio) ||
+        !std::isfinite(runtimeConfig.foldSpreadSuppressStartRatio) ||
+        !std::isfinite(runtimeConfig.foldSpreadSuppressEndRatio) ||
         !std::isfinite(runtimeConfig.crosstalkMaxAbsIntercept) ||
         runtimeConfig.thumbGateDeadbandRatio < 0.0 ||
         runtimeConfig.thumbGateDeadbandRatio > 1.0 ||
         runtimeConfig.spreadDeadbandRatio < 0.0 ||
         runtimeConfig.spreadDeadbandRatio > 1.0 ||
+        runtimeConfig.flexDeadbandRatio < 0.0 ||
+        runtimeConfig.flexDeadbandRatio > 1.0 ||
+        runtimeConfig.thumbFlexGateStartRatio < 0.0 ||
+        runtimeConfig.thumbFlexGateStartRatio > 1.0 ||
+        runtimeConfig.thumbFlexGateEndRatio < 0.0 ||
+        runtimeConfig.thumbFlexGateEndRatio > 1.0 ||
+        runtimeConfig.thumbFlexGateStartRatio >= runtimeConfig.thumbFlexGateEndRatio ||
+        runtimeConfig.foldSpreadSuppressStartRatio < 0.0 ||
+        runtimeConfig.foldSpreadSuppressStartRatio > 1.0 ||
+        runtimeConfig.foldSpreadSuppressEndRatio < 0.0 ||
+        runtimeConfig.foldSpreadSuppressEndRatio > 1.0 ||
+        runtimeConfig.foldSpreadSuppressStartRatio >= runtimeConfig.foldSpreadSuppressEndRatio ||
         runtimeConfig.crosstalkMaxAbsIntercept < 0.0) {
         return false;
     }
@@ -263,8 +281,8 @@ bool HandAngleAlgorithm::finishCalibration() {
     }
 
     if (samplingState_.stage == CalibrationStage::Crosstalk) {
-        // Crosstalk 必须在三步校准完成后才能进行
-        if (!isReady()) {
+        // Crosstalk 必须在基础校准完成后才能进行
+        if (!hasBaseCalibration()) {
             resetSamplingState();
             return false;
         }
@@ -299,8 +317,12 @@ bool HandAngleAlgorithm::finishCalibration() {
     return true;
 }
 
-bool HandAngleAlgorithm::isReady() const {
+bool HandAngleAlgorithm::hasBaseCalibration() const {
     return hasClosed_ && hasFist_ && hasOpen_;
+}
+
+bool HandAngleAlgorithm::isReady() const {
+    return hasBaseCalibration() && hasXtalk_;
 }
 
 std::array<double, kChannelCount> HandAngleAlgorithm::meanFilteredFrm(const int16_t adValues[kChannelCount]) {
@@ -402,7 +424,7 @@ double HandAngleAlgorithm::getFlexRatio(int channelIndex, double currentValue) {
     return stabilizeRatio(
         flexStable_[toChannelArrayIndex(channelIndex)],
         ratioValue,
-        kFlexDeadbandRatio);
+        runtimeConfig_.flexDeadbandRatio);
 }
 
 double HandAngleAlgorithm::getSpreadRatio(int channelIndex, double currentValue) {
@@ -453,7 +475,7 @@ double HandAngleAlgorithm::getThumbGateRatio(const std::array<double, kChannelCo
     filteredRatio = stabilizeRatio(thumbGateStableState_, filteredRatio, runtimeConfig_.thumbGateDeadbandRatio);
 
     // 第四层：smoothstep 重新映射 [startRatio, endRatio] → [0, 1]
-    return getSmoothstepRatio(kThumbFlexGateStartRatio, kThumbFlexGateEndRatio, filteredRatio);
+    return getSmoothstepRatio(runtimeConfig_.thumbFlexGateStartRatio, runtimeConfig_.thumbFlexGateEndRatio, filteredRatio);
 }
 
 double HandAngleAlgorithm::getThumbInwardAmplitudeRatio(const std::array<double, kChannelCount>& channelValueList) {
@@ -561,21 +583,23 @@ void HandAngleAlgorithm::buildOutputValue(const std::array<double, kChannelCount
     const SpreadPairConfig& ringPinkySpreadConfig = kSpreadPairConfigList[0];
     const SpreadPairConfig& middleRingSpreadConfig = kSpreadPairConfigList[1];
     const SpreadPairConfig& indexMiddleSpreadConfig = kSpreadPairConfigList[2];
+    const double suppressStart = runtimeConfig_.foldSpreadSuppressStartRatio;
+    const double suppressEnd = runtimeConfig_.foldSpreadSuppressEndRatio;
     outputValue.index_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(indexMiddleSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(indexMiddleSpreadConfig.channelIndex)]),
             std::max(indexRootFlexRatio, middleRootFlexRatio),
-            indexMiddleSpreadConfig));
+            indexMiddleSpreadConfig, suppressStart, suppressEnd));
     outputValue.ring_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(middleRingSpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(middleRingSpreadConfig.channelIndex)]),
             std::max(middleRootFlexRatio, ringRootFlexRatio),
-            middleRingSpreadConfig));
+            middleRingSpreadConfig, suppressStart, suppressEnd));
     outputValue.little_finger[3] = convertAngleToFloat(
         buildEffectiveSpreadAngle(
             getSpreadRatio(ringPinkySpreadConfig.channelIndex, channelValueList[toChannelArrayIndex(ringPinkySpreadConfig.channelIndex)]),
             std::max(ringRootFlexRatio, littleRootFlexRatio),
-            ringPinkySpreadConfig));
+            ringPinkySpreadConfig, suppressStart, suppressEnd));
 
     // 拇指展开（有符号，正=外展，负=内收）
     double spreadRatio16 = getSpreadRatio(16, channelValueList[toChannelArrayIndex(16)]);

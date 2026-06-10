@@ -225,7 +225,7 @@ int main() {
                               << " 校准 姿态=" << getCalibrationStageText(nextStage)
                               << " 持续 " << durationMs << "ms" << std::endl;
                 } else {
-                    std::cout << "三步校准已完成，正在实时输出角度。" << std::endl;
+                    std::cout << "四步校准已完成，正在实时输出角度。" << std::endl;
                 }
             }
         }
@@ -272,7 +272,9 @@ int main() {
             }
         }
 
-        if (!serialPollResult.hasFrame || samplingRuntimeState.isActive || !algorithm.isReady()) {
+        if (!serialPollResult.hasFrame ||
+            samplingRuntimeState.isActive ||
+            !algorithm.isReady()) {
             continue;
         }
 
