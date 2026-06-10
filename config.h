@@ -62,8 +62,8 @@ constexpr double kThumbInwardPalmAngle = 45.0;
 constexpr int kThumbInwardGateChannel = 18;
 
 // 拇指内收门控 smoothstep 映射区间。
-constexpr double kThumbFlexGateStartRatio = 0.18;
-constexpr double kThumbFlexGateEndRatio = 0.45;
+constexpr double kThumbFlexGateStartRatio = 0.1;
+constexpr double kThumbFlexGateEndRatio = 0.3;
 
 // 拇指内收门控死区。
 constexpr double kThumbGateDeadbandRatio = 0.025;
