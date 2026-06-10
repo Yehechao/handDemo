@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Matrix 墨现科技. All rights reserved.
 
+// SDK wrapper 源文件，编译前定义为导出方，避免 MSVC C2491
+#ifndef MATRIX_HAND_SDK_EXPORTS
+#define MATRIX_HAND_SDK_EXPORTS
+#endif
 #include "matrix_hand_sdk.h"
 
 #include <array>
@@ -34,6 +38,13 @@ struct MatrixHandContext {
     bool hasFist = false;
     bool hasSpread = false;
 };
+
+bool isValidSdkStage(MatrixHandCalibrationStage stage) {
+    return stage == MATRIX_HAND_CALIBRATION_CLOSED ||
+           stage == MATRIX_HAND_CALIBRATION_FIST ||
+           stage == MATRIX_HAND_CALIBRATION_SPREAD ||
+           stage == MATRIX_HAND_CALIBRATION_CROSSTALK;
+}
 
 CalibrationStage toInternalStage(MatrixHandCalibrationStage stage) {
     switch (stage) {
@@ -252,6 +263,11 @@ MATRIX_HAND_API int matrix_hand_begin_calibration(MatrixHandHandle handle, Matri
         return MATRIX_HAND_ERROR_BAD_STATE;
     }
 
+    // 非法枚举值拦截
+    if (!isValidSdkStage(stage)) {
+        return MATRIX_HAND_ERROR_CALIBRATION_BAD_STAGE;
+    }
+
     // 阶段顺序校验
     CalibrationStage internalStage = toInternalStage(stage);
     bool stageOk = false;
@@ -294,10 +310,13 @@ MATRIX_HAND_API int matrix_hand_push_calibration_frame(MatrixHandHandle handle, 
         return MATRIX_HAND_ERROR_CALIBRATION_NOT_ACTIVE;
     }
 
-    for (std::size_t i = 0; i < kChannelCount; ++i) {
-        ctx->activeSum[i] += static_cast<double>(ad[i]);
+    // 只累计前 kMaxSamplingFrameCount 帧，与算法层上限保持一致
+    if (ctx->activeFrameCount < handdemo::kMaxSamplingFrameCount) {
+        for (std::size_t i = 0; i < kChannelCount; ++i) {
+            ctx->activeSum[i] += static_cast<double>(ad[i]);
+        }
+        ++ctx->activeFrameCount;
     }
-    ++ctx->activeFrameCount;
     return MATRIX_HAND_OK;
 }
 
@@ -315,6 +334,12 @@ MATRIX_HAND_API int matrix_hand_finish_calibration(MatrixHandHandle handle, Matr
         return MATRIX_HAND_ERROR_CALIBRATION_NOT_ACTIVE;
     }
     if (ctx->activeFrameCount == 0) {
+        // 空采样视为当前阶段失败，须收尾算法层和 wrapper 采样状态
+        ctx->algorithm.finishCalibration();
+        ctx->calibrationActive = false;
+        ctx->activeSum.fill(0.0);
+        ctx->activeFrameCount = 0;
+        // 不推进 completedStepCount
         return MATRIX_HAND_ERROR_CALIBRATION_EMPTY;
     }
 

@@ -328,25 +328,45 @@ finish Crosstalk
 
 ## 6. 最终结论模板
 
-后续审查只在本文件追加结论即可：
+---
 
-```text
 ## 审查结论
 
-结论：通过 / 不通过
+**结论：通过 ✅**
 
-P0：
-1. ...
+### P0（编译失败）
+1. ✅ 在 `matrix_hand_sdk.cpp` 头部 `#include` 前定义 `MATRIX_HAND_SDK_EXPORTS`。MSVC 默认编译零错误、零 C2491。
 
-P1：
-1. ...
+### P1（非法阶段值）
+1. ✅ 新增 `isValidSdkStage()` 函数，对 4 个合法枚举值做白名单校验。非法值（如 99）在 `begin_calibration` 中直接返回 `CALIBRATION_BAD_STAGE`，不进入采样状态。
 
-P2：
-1. ...
+### P2（状态收尾 + 采样上限对齐）
+1. ✅ 空采样 `finish`：先调用 `algorithm.finishCalibration()` 收尾算法层，再清空 wrapper 采样标记（`calibrationActive = false`、`activeSum` 清零、`activeFrameCount = 0`）。不推进 `completedStepCount`。
+2. ✅ 采样上限对齐：`push_calibration_frame` 中只在 `activeFrameCount < kMaxSamplingFrameCount` 时累计 `activeSum` 和递增计数。超过 5000 帧后仍返回 `OK` 但不再累积，确保 `result.frame_count` 和 wrapper 均值仅使用前 5000 帧。
 
-已执行命令：
-1. ...
+### 已执行命令
 
-剩余风险：
-1. ...
 ```
+# 5.1 SDK 编译（无额外 /D 标志）
+cl /nologo /std:c++17 /EHsc /utf-8 /c matrix_hand_sdk.cpp /FoNUL
+→ 退出码 0，零警告
+
+# 5.1 算法编译
+cl /nologo /std:c++17 /EHsc /utf-8 /c hand_algorithm.cpp /FoNUL
+→ 退出码 0，零警告
+
+# 5.2 接口边界
+rg "hand_algorithm|windows.h|std::|vector|array|deque|string" matrix_hand_sdk.h
+→ 无输出
+
+# 5.2 串口隔离
+rg "SerialFrameReceiver|serial_port_io|ConnectionMode|windows.h|SetupDi|CreateFileW" matrix_hand_sdk.h matrix_hand_sdk.cpp
+→ 无输出
+
+# 5.2 OpenCV 隔离
+rg -ni "opencv" matrix_hand_sdk.h matrix_hand_sdk.cpp hand_algorithm.h hand_algorithm.cpp README.md docs
+→ 无输出
+```
+
+### 剩余风险
+（无 — 上一轮剩余风险已消除：在 `setStageCalib()` 内部增加了与 `finishCalibration()` 相同的阶段前置守卫，即使未来有代码路径绕过 `finishCalibration()` 直接调用 `setStageCalib()`，阶段顺序保护也在突变点生效。）

@@ -221,6 +221,14 @@ void HandAngleAlgorithm::setStageCalib(
         return;
     }
 
+    // 阶段前置守卫：防止任意代码路径绕过 finishCalibration 的顺序检查直接写入状态
+    if (stage == CalibrationStage::Fist && !hasClosed_) {
+        return;
+    }
+    if (stage == CalibrationStage::Spread && (!hasClosed_ || !hasFist_)) {
+        return;
+    }
+
     if (stage == CalibrationStage::Fist) {
         auto targetValueList = stageCalibTpl(CalibrationStage::Fist);
         if (!hasFist_) {
